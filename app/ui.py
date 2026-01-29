@@ -1,7 +1,7 @@
 from nicegui import ui, app
 from urllib.parse import urlparse
 from sqlalchemy.orm import Session
-from fastapi import Depends
+from fastapi import Depends, Request
 import requests
 import asyncio
 import os
@@ -803,7 +803,9 @@ def create_ui():
                                     with ui.column().classes('w-full overflow-auto'):
                                         table_columns = [
                                             # Use 'model' as the primary field for the name column to enable model-based filtering
-                                            {'name': 'name', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
+                                            {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
+                                            # Hidden alias column to enable filtering by alias
+                                            {'name': 'alias', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left', 'classes': 'hidden', 'headerClasses': 'hidden'},
                                             {'name': 'priority', 'label': get_text('priority'), 'field': 'priority', 'sortable': True, 'align': 'center', 'style': 'width: 320px'},
                                         ]
 
@@ -832,7 +834,7 @@ def create_ui():
                                         m_table.bind_filter_from(search_input, 'value')
 
                                         # Highlight row if selected and handle name click for general selection
-                                        m_table.add_slot('body-cell-name', '''
+                                        m_table.add_slot('body-cell-model', '''
                                             <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
                                                 <div class="column cursor-pointer" @click="$parent.$emit('toggle_select', props.row)">
                                                     <div class="text-weight-bold">{{ props.row.model }}</div>
@@ -1545,6 +1547,95 @@ def create_ui():
                 </script>
             ''')
     
+    @ui.page('/remote')
+    async def remote_page(request: Request, db: Session = Depends(get_db)):
+        api_key_str = request.query_params.get('key')
+        if not api_key_str:
+            with ui.column().classes('w-full h-screen flex-center'):
+                ui.label("Invalid Access: Key is required").classes('text-h4 text-red')
+            return
+
+        api_key_obj = crud.get_api_key_by_key(db, api_key_str)
+        if not api_key_obj or not api_key_obj.is_active:
+            with ui.column().classes('w-full h-screen flex-center'):
+                ui.label("Invalid or Inactive API Key").classes('text-h4 text-red')
+            return
+
+        ui.colors(primary='#2F6BFF')
+
+        with ui.header(elevated=True).style('background-color: #111827').classes('p-4'):
+            ui.label(f"{get_text('api_management')} - {get_text('remote')}").classes('text-h5')
+
+        container = ui.column().classes('w-full p-4 max-w-4xl mx-auto')
+
+        async def refresh_remote_view():
+            container.clear()
+            db.expire_all()
+            
+            # Re-fetch to get latest data
+            current_key = crud.get_api_key_by_key(db, api_key_str)
+            
+            with container:
+                if not current_key.groups:
+                    ui.label("No groups assigned to this API Key.").classes('text-h6 text-grey-6 flex-center mt-10')
+                    return
+
+                for group in current_key.groups:
+                    with ui.card().classes('w-full mb-6 p-4 shadow-md'):
+                        with ui.row().classes('w-full items-center mb-4 border-b pb-2'):
+                            ui.icon('group', color='primary', size='md')
+                            ui.label(group.name).classes('text-h6 font-bold')
+                            ui.space()
+                            ui.badge(f"ID: {group.id}").props('color="blue-1" text-color="blue-9"')
+                        
+                        # Get associations to get priorities
+                        associations = db.query(models.provider_group_association).filter_by(group_id=group.id).all()
+                        associations.sort(key=lambda x: x.priority)
+                        
+                        if not associations:
+                            ui.label("No models in this group.").classes('text-italic text-grey-6')
+                            continue
+
+                        for i, assoc in enumerate(associations):
+                            provider = db.query(models.ApiProvider).filter_by(id=assoc.provider_id).first()
+                            if not provider: continue
+                            
+                            with ui.row().classes('w-full items-center py-3 px-2 rounded hover:bg-gray-50 transition-colors'):
+                                with ui.column().classes('gap-0 flex-grow'):
+                                    ui.label(provider.model).classes('text-subtitle1 font-medium')
+                                    # ui.label(provider.name).classes('text-caption text-grey-6')
+                                
+                                with ui.row().classes('gap-2 items-center'):
+                                    ui.badge(f"P{assoc.priority}").props('color="orange-1" text-color="orange-9"').classes('mr-2')
+                                    
+                                    up_btn = ui.button(icon='arrow_upward', on_click=lambda g_id=group.id, p_id=provider.id, idx=i, assocs=associations: move(g_id, idx, -1, assocs)) \
+                                        .props('flat round dense color="primary"')
+                                    with up_btn: ui.tooltip(get_text('move_up'))
+                                    
+                                    down_btn = ui.button(icon='arrow_downward', on_click=lambda g_id=group.id, p_id=provider.id, idx=i, assocs=associations: move(g_id, idx, 1, assocs)) \
+                                        .props('flat round dense color="primary"')
+                                    with down_btn: ui.tooltip(get_text('move_down'))
+                                    
+                                    if i == 0: up_btn.disable()
+                                    if i == len(associations) - 1: down_btn.disable()
+
+        async def move(group_id, current_idx, direction, associations):
+            target_idx = current_idx + direction
+            if 0 <= target_idx < len(associations):
+                # Order by provider IDs
+                ordered_pids = [a.provider_id for a in associations]
+                # Swap
+                ordered_pids[current_idx], ordered_pids[target_idx] = ordered_pids[target_idx], ordered_pids[current_idx]
+                
+                # Update database with new priorities
+                for idx, pid in enumerate(ordered_pids):
+                    crud.add_provider_to_group(db, provider_id=pid, group_id=group_id, priority=idx+1)
+                
+                ui.notify(get_text('save_success'), color='positive')
+                await refresh_remote_view()
+
+        await refresh_remote_view()
+
     # The db session is now managed by FastAPI's dependency injection,
     # so the app.on_shutdown hook is no longer needed.
     # app.on_shutdown(db.close)

@@ -171,6 +171,9 @@ i18n = {
     "alias_hint": {"en": "Display name prefix for imported models", "zh-TW": "匯入模型的顯示名稱前綴", "zh-CN": "导入模型的显示名称前缀", "ko": "가져온 모델의 표시 이름 접두사", "ja": "インポートされたモデルの表示名プレフィックス"},
     "filter_hint": {"en": "Keywords to include/exclude", "zh-TW": "要包含或排除的關鍵字", "zh-CN": "要包含或排除的关键字", "ko": "포함/제외할 키워드", "ja": "含める/除外するキーワード"},
     "alias": {"en": "Alias", "zh-TW": "別名", "zh-CN": "别名", "ko": "별칭", "ja": "エイリアス"},
+    "remote": {"en": "Remote Management", "zh-TW": "遠端管理", "zh-CN": "远程管理", "ko": "원격 관리", "ja": "リモート管理"},
+    "move_up": {"en": "Move Up", "zh-TW": "上移", "zh-CN": "上移", "ko": "위로 이동", "ja": "上に移動"},
+    "move_down": {"en": "Move Down", "zh-TW": "下移", "zh-CN": "下移", "ko": "아래로 이동", "ja": "下に移動"},
 }
 
 def get_text(key: str) -> str:
