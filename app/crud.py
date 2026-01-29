@@ -8,8 +8,13 @@ def get_provider(db: Session, provider_id: int):
 def get_provider_by_name(db: Session, name: str):
     return db.query(models.ApiProvider).filter(models.ApiProvider.name == name).first()
 
-def get_providers(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.ApiProvider).offset(skip).limit(limit).all()
+def get_providers(db: Session, skip: int = 0, limit: int = 1000, name_filter: str = None, endpoint_filter: str = None):
+    query = db.query(models.ApiProvider)
+    if name_filter:
+        query = query.filter(models.ApiProvider.name.contains(name_filter))
+    if endpoint_filter:
+        query = query.filter(models.ApiProvider.api_endpoint.contains(endpoint_filter))
+    return query.offset(skip).limit(limit).all()
 
 def get_unique_endpoints(db: Session):
     return db.query(models.ApiProvider.api_endpoint).distinct().all()

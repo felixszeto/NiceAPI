@@ -5,7 +5,7 @@ from typing import List
 import asyncio
 import json
 from . import crud, models, schemas, router as smart_router
-from .database import get_db
+from .database import get_db, SessionLocal
 from fastapi.responses import StreamingResponse
 import time
 import logging
@@ -105,13 +105,30 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
     # The user now sends a group name as the "model".
     # Check if the requested group name is in the list of groups associated with the API key.
     authorized_group_names = {group.name for group in api_key.groups}
-    if request.model not in authorized_group_names:
+    
+    # Matching logic: allow exact match or match after removing prefix (e.g., 'gemini' matches 'google/gemini')
+    matched_group_name = None
+    if request.model in authorized_group_names:
+        matched_group_name = request.model
+    else:
+        # Try to find a group that ends with /requested_model
+        for name in authorized_group_names:
+            if name.endswith(f"/{request.model}"):
+                matched_group_name = name
+                logger.info(f"Mapping requested model '{request.model}' to authorized group '{matched_group_name}'")
+                break
+    
+    if not matched_group_name:
         group_names = ", ".join(list(authorized_group_names))
         logger.warning(f"API Key {api_key.key[:5]}... not authorized for group '{request.model}'. Authorized groups: [{group_names}]")
         raise HTTPException(
             status_code=403,
             detail={"error": {"message": f"API key not authorized for the requested model (group): {request.model}", "type": "permission_denied_error"}}
         )
+
+    # Update the request model to the matched group name so select_provider finds the right providers
+    original_requested_model = request.model
+    request.model = matched_group_name
 
     # --- Streaming Response Logic ---
     if request.stream:
@@ -177,6 +194,8 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                 error_message="Usage data not available for streaming responses.",
                                 response_body=full_response_text
                             ))
+                            logger.info(f"--- Streaming Response Finished (Provider ID: {provider.id}) ---")
+                            logger.info(f"Full response text: {full_response_text[:500]}..." if len(full_response_text) > 500 else f"Full response text: {full_response_text}")
                             break
 
                 except (httpx.RequestError, ValueError) as e:
@@ -241,6 +260,8 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     total_tokens=usage.get("total_tokens"), cost=cost,
                     response_body=json.dumps(response_json)
                 ))
+                logger.info(f"--- Non-streaming Response Success (Provider ID: {provider.id}) ---")
+                logger.info(f"Response JSON: {json.dumps(response_json)}")
                 return response_json
 
             except (httpx.RequestError, ValueError) as e:
@@ -271,8 +292,9 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 continue
 
 @router.post("/api/import-models/")
-async def import_models(request: schemas.ModelImportRequest, db: Session = Depends(get_db)):
+async def import_models(request: schemas.ModelImportRequest):
     async def progress_stream():
+        db = SessionLocal()
         try:
             logger.info(f"Starting model import from raw base URL: {request.base_url}")
             
@@ -322,20 +344,24 @@ async def import_models(request: schemas.ModelImportRequest, db: Session = Depen
                     continue
 
                 # Check for duplicates in a sync way
-                if request.alias:
-                    formatted_name = f"{request.alias}.{model_id.split('/')[-1]}"
-                else:
-                    formatted_name = model_id.split('/')[-1]
+                # Requirement: Alias is used directly as name, no model name combination
+                formatted_name = request.alias if request.alias else model_id.replace('/', '.')
 
-                existing_provider = crud.get_provider_by_name(db, name=formatted_name)
+                # Requirement: Use api_endpoint + api_key + model together as uniqueness check
+                target_endpoint = f"{v1_base_url}/chat/completions"
+                existing_provider = db.query(models.ApiProvider).filter(
+                    models.ApiProvider.api_endpoint == target_endpoint,
+                    models.ApiProvider.api_key == request.api_key,
+                    models.ApiProvider.model == model_id
+                ).first()
+                
                 if existing_provider:
-                    logger.info(f"Provider with name '{formatted_name}' already exists. Skipping.")
+                    logger.info(f"Provider with endpoint={target_endpoint}, key={request.api_key[:5]}..., model={model_id} already exists. Skipping.")
                     continue
-
 
                 provider_data = schemas.ApiProviderCreate(
                     name=formatted_name,
-                    api_endpoint=f"{v1_base_url}/chat/completions",
+                    api_endpoint=target_endpoint,
                     api_key=request.api_key,
                     model=model_id,
                     price_per_million_tokens=0,
@@ -344,9 +370,9 @@ async def import_models(request: schemas.ModelImportRequest, db: Session = Depen
                     is_active=True
                 )
                 
-                crud.create_provider(db, provider_data)
+                new_provider = crud.create_provider(db, provider_data)
                 imported_count += 1
-                logger.info(f"Successfully imported and created provider for model '{model_id}'.")
+                logger.info(f"Successfully imported and created provider (ID: {new_provider.id}) for model '{model_id}'.")
                 yield f"data: PROGRESS={imported_count}\n\n"
                 await asyncio.sleep(0.05) # Small delay to allow UI to update
 
@@ -363,6 +389,8 @@ async def import_models(request: schemas.ModelImportRequest, db: Session = Depen
         except Exception as e:
             logger.error(f"An unexpected error occurred during model import: {e}")
             yield f"data: ERROR=An unexpected error occurred: {e}\n\n"
+        finally:
+            db.close()
 
     return StreamingResponse(progress_stream(), media_type="text/event-stream")
 

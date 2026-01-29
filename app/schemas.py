@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any, Union
 from datetime import datetime
 
 # Base schema for ApiProvider
@@ -62,7 +62,7 @@ class ModelImportRequest(BaseModel):
 # Schema for the main chat request
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, List[Any]]
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]

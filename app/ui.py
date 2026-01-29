@@ -63,15 +63,18 @@ def create_ui():
             # This is the main content of the application.
             # It's only shown if the user is authenticated.
             
-            def get_all_providers_as_dict():
-                providers = crud.get_providers(db)
+            def get_all_providers_as_dict(name_filter=None, endpoint_filter=None):
+                providers = crud.get_providers(db, name_filter=name_filter, endpoint_filter=endpoint_filter)
                 return [
                     {key: getattr(p, key) for key in p.__table__.columns.keys()}
                     for p in providers
                 ]
 
             def refresh_providers_table():
-                table.rows = get_all_providers_as_dict()
+                table.rows = get_all_providers_as_dict(
+                    name_filter=provider_name_filter.value if 'provider_name_filter' in locals() else None,
+                    endpoint_filter=provider_endpoint_filter.value if 'provider_endpoint_filter' in locals() else None
+                )
                 table.update()
 
             with ui.header(elevated=True).style('background-color: #111827').classes('p-2'):
@@ -374,29 +377,148 @@ def create_ui():
                     with ui.row().classes('w-full items-center mb-4'):
                         ui.label(get_text('providers')).classes('text-h6')
                         ui.space()
+                        with ui.row().classes('items-center gap-2'):
+                            provider_name_filter = ui.input(placeholder=get_text('filter_by_name')).props('outlined dense').on('update:model-value', refresh_providers_table)
+                            provider_endpoint_filter = ui.input(placeholder=get_text('filter_by_endpoint')).props('outlined dense').on('update:model-value', refresh_providers_table)
                         ui.button(get_text('refresh_providers'), on_click=refresh_providers_table_async, icon='refresh', color='primary').props('flat')
+                        
+                        async def open_sync_models_dialog():
+                            providers = crud.get_providers(db)
+                            # Unique by endpoint + key
+                            unique_sync_targets = {}
+                            for p in providers:
+                                target_key = (p.api_endpoint, p.api_key)
+                                if target_key not in unique_sync_targets:
+                                    unique_sync_targets[target_key] = p.name
+                            
+                            # Use dict for options to be safe with NiceGUI
+                            options = {}
+                            for (endpoint, key), name in unique_sync_targets.items():
+                                # Encode key/endpoint into a string since dict keys must be hashable
+                                # Display as: [Alias] ([masked key])
+                                options[f"{endpoint}|{key}"] = f"{name} [{endpoint}] ({key[:5]}...{key[-4:]})"
+
+                            if not options:
+                                ui.notify("No providers available to sync.", color='warning')
+                                return
+
+                            with ui.dialog() as sync_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                                ui.label(get_text('select_providers_to_sync')).classes('text-h6')
+                                
+                                # Multi-select for targets
+                                target_select = ui.select(
+                                    options=options,
+                                    multiple=True,
+                                    label=get_text('providers')
+                                ).props('filled use-chips').classes('w-full')
+                                
+                                with ui.row():
+                                    def select_all():
+                                        target_select.value = list(options.keys())
+                                    ui.button(get_text('select_all'), on_click=select_all).props('flat')
+
+                                async def handle_sync():
+                                    if not target_select.value:
+                                        ui.notify("Please select at least one provider to sync.", color='warning')
+                                        return
+                                    
+                                    sync_dialog.close()
+                                    async with loading_animation():
+                                        try:
+                                            added_total = 0
+                                            deactivated_total = 0
+                                            
+                                            for target_val in target_select.value:
+                                                endpoint, api_key = target_val.split('|', 1)
+                                                # Fetch models from endpoint
+                                                base_url = endpoint.split('/v1/chat/completions')[0]
+                                                models_url = f"{base_url.rstrip('/')}/v1/models"
+                                                
+                                                import httpx
+                                                async with httpx.AsyncClient() as client:
+                                                    try:
+                                                        response = await client.get(models_url, headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
+                                                        if response.status_code == 200:
+                                                            remote_models_data = response.json()
+                                                            remote_model_ids = [m['id'] for m in remote_models_data.get('data', [])]
+                                                            
+                                                            # Get current models in DB for this endpoint + key
+                                                            db_providers = db.query(models.ApiProvider).filter(
+                                                                models.ApiProvider.api_endpoint == endpoint,
+                                                                models.ApiProvider.api_key == api_key
+                                                            ).all()
+                                                            db_model_map = {p.model: p for p in db_providers}
+                                                            
+                                                            # 4.1 如有未存在的models則新增
+                                                            # Requirement: endpoint + key + model 三者完全符合才算重複
+                                                            for model_id in remote_model_ids:
+                                                                # Check if this exact triplet exists in the database
+                                                                triplet_exists = db.query(models.ApiProvider).filter(
+                                                                    models.ApiProvider.api_endpoint == endpoint,
+                                                                    models.ApiProvider.api_key == api_key,
+                                                                    models.ApiProvider.model == model_id
+                                                                ).first()
+                                                                
+                                                                if not triplet_exists:
+                                                                    template = db_providers[0] if db_providers else None
+                                                                    new_provider = schemas.ApiProviderCreate(
+                                                                        name=template.name if template else model_id,
+                                                                        api_endpoint=endpoint,
+                                                                        api_key=api_key,
+                                                                        model=model_id,
+                                                                        price_per_million_tokens=template.price_per_million_tokens if template else 0,
+                                                                        type=template.type if template else 'per_token',
+                                                                        is_active=True
+                                                                    )
+                                                                    crud.create_provider(db, new_provider)
+                                                                    added_total += 1
+                                                            
+                                                            # 4.3 models列表沒有但db有則把db內該條記錄的is_active設定為0
+                                                            for m_id, p_obj in db_model_map.items():
+                                                                if m_id not in remote_model_ids and p_obj.is_active:
+                                                                    crud.update_provider(db, p_obj.id, {"is_active": False})
+                                                                    deactivated_total += 1
+                                                    except Exception as e:
+                                                        ui.notify(f"Error syncing {endpoint}: {e}", color='negative')
+                                            
+                                            ui.notify(get_text('sync_models_completed').format(added=added_total, deactivated=deactivated_total), color='positive')
+                                            refresh_providers_table()
+                                        except Exception as e:
+                                            ui.notify(get_text('sync_error').format(error=str(e)), color='negative')
+
+                                with ui.row():
+                                    ui.button(get_text('sync'), on_click=handle_sync, color='primary')
+                                    ui.button(get_text('cancel'), on_click=sync_dialog.close)
+                            
+                            sync_dialog.open()
+
+                        ui.button(get_text('sync_models'), on_click=open_sync_models_dialog, icon='sync', color='primary').props('flat')
 
                     # Add Provider Dialog
                     with ui.dialog() as add_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
                         ui.label(get_text('add_new_provider')).classes('text-h6')
                         with ui.column().classes('w-full'):
-                            name_input = ui.input(get_text('name')).props('filled').classes('w-full')
-                            endpoint_input = ui.input(get_text('api_endpoint')).props('filled').classes('w-full')
-                            key_input = ui.input(get_text('api_key'), password=True).props('filled').classes('w-full')
-                            model_input = ui.input(get_text('model')).props('filled').classes('w-full')
-                            price_input = ui.number(get_text('price_per_million_tokens')).props('filled').classes('w-full')
+                            name_input = ui.input(get_text('name'), placeholder=get_text('provider_name_hint')).props('filled').classes('w-full')
+                            endpoint_input = ui.input(get_text('api_endpoint'), placeholder=get_text('endpoint_hint')).props('filled').classes('w-full')
+                            key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
+                            model_input = ui.input(get_text('model'), placeholder=get_text('model_hint')).props('filled').classes('w-full')
+                            price_input = ui.number(get_text('price_per_million_tokens'), placeholder=get_text('price_hint')).props('filled').classes('w-full')
                             type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('type')).props('filled').classes('w-full')
                             active_toggle = ui.switch(get_text('active'), value=True)
 
                         def handle_add():
                             url = endpoint_input.value.strip()
-                            parsed = urlparse(url)
-                            # If there's no path component, assume it's a base URL and complete it
-                            if not parsed.path or parsed.path == '/':
-                                final_endpoint = f"{url.rstrip('/')}/v1/chat/completions"
+                            # Automatically append /chat/completions if the URL ends with /v1 or a variant
+                            if url.endswith('/v1') or url.endswith('/v1/'):
+                                final_endpoint = f"{url.rstrip('/')}/chat/completions"
                                 ui.notify(f"Endpoint auto-completed to: {final_endpoint}", color='info')
                             else:
-                                final_endpoint = url
+                                parsed = urlparse(url)
+                                if not parsed.path or parsed.path == '/':
+                                    final_endpoint = f"{url.rstrip('/')}/v1/chat/completions"
+                                    ui.notify(f"Endpoint auto-completed to: {final_endpoint}", color='info')
+                                else:
+                                    final_endpoint = url
 
                             provider_data = schemas.ApiProviderCreate(
                                 name=name_input.value,
@@ -407,6 +529,18 @@ def create_ui():
                                 type=type_select.value,
                                 is_active=active_toggle.value
                             )
+                            
+                            # Rigorous duplicate check: endpoint + key + model
+                            existing = db.query(models.ApiProvider).filter(
+                                models.ApiProvider.api_endpoint == final_endpoint,
+                                models.ApiProvider.api_key == key_input.value,
+                                models.ApiProvider.model == model_input.value
+                            ).first()
+                            
+                            if existing:
+                                ui.notify(f"Provider with this endpoint, key, and model already exists (ID: {existing.id})", color='warning')
+                                return
+
                             crud.create_provider(db, provider_data)
                             ui.notify(get_text('provider_added').format(name=name_input.value), color='positive')
                             refresh_providers_table()
@@ -420,13 +554,13 @@ def create_ui():
                     with ui.dialog() as import_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
                         ui.label(get_text('import_models_from_url')).classes('text-h6')
                         with ui.column().classes('w-full'):
-                            base_url_input = ui.input(get_text('base_url'), value='https://xxxx').props('filled').classes('w-full')
-                            api_key_input = ui.input(get_text('api_key'), password=True).props('filled').classes('w-full')
-                            alias_input = ui.input(get_text('alias_optional'), placeholder='e.g., ollama').props('filled').classes('w-full')
+                            base_url_input = ui.input(get_text('base_url'), placeholder=get_text('base_url_hint')).props('filled').classes('w-full')
+                            api_key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
+                            alias_input = ui.input(get_text('alias_optional'), placeholder=get_text('alias_hint')).props('filled').classes('w-full')
                             default_type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('default_type')).props('filled').classes('w-full')
                             with ui.row().classes('w-full no-wrap'):
                                 filter_mode_select = ui.select(['None', 'Include', 'Exclude'], value='None', label=get_text('filter_mode')).props('filled').classes('w-1/3')
-                                filter_keyword_input = ui.input(get_text('model_name_filter')).props('filled').classes('flex-grow')
+                                filter_keyword_input = ui.input(get_text('model_name_filter'), placeholder=get_text('filter_hint')).props('filled').classes('flex-grow')
                         
                         with ui.element('div').classes('w-full relative h-6') as progress_container:
                             progress = ui.linear_progress(value=0, show_value=False).props('rounded size="25px" color="positive" striped').classes('w-full h-full')
@@ -500,8 +634,15 @@ def create_ui():
                         with ui.dialog() as dialog, ui.card().style('width: 60vw; max-width: 800px;'):
                             ui.label(get_text('quick_remove_by_api_key')).classes('text-h6')
 
-                            def get_keys():
-                                return [k[0] for k in crud.get_all_unique_keys(db)]
+                            def get_keys_with_alias():
+                                providers = crud.get_providers(db)
+                                key_info = {}
+                                for p in providers:
+                                    # Create a unique display based on both Alias and masked api_key
+                                    display_val = f"{p.name} [{p.api_endpoint}] ({p.api_key[:5]}...{p.api_key[-4:]})"
+                                    key_info[p.api_key] = display_val
+                                
+                                return key_info
 
                             def handle_quick_remove(key_select):
                                 key = key_select.value
@@ -514,7 +655,7 @@ def create_ui():
                                 refresh_providers_table()
                                 dialog.close()
 
-                            qr_key_select = ui.select(options=get_keys(), label=get_text('api_key')).props('filled').classes('w-full')
+                            qr_key_select = ui.select(options=get_keys_with_alias(), label=get_text('api_key')).props('filled').classes('w-full')
 
                             with ui.row():
                                 ui.button(get_text('remove'), on_click=lambda: handle_quick_remove(qr_key_select), color='negative')
@@ -523,8 +664,8 @@ def create_ui():
 
                     columns = [
                         {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True},
-                        {'name': 'name', 'label': get_text('name'), 'field': 'name', 'sortable': True, 'align': 'left'},
-                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True},
+                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
+                        {'name': 'name', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left'},
                         {'name': 'price_per_million_tokens', 'label': get_text('price_dollar_per_1m'), 'field': 'price_per_million_tokens', 'sortable': True},
                         {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
@@ -535,7 +676,7 @@ def create_ui():
                         ui.button(get_text('import_from_url'), on_click=import_dialog.open, color='primary')
                         ui.button(get_text('quick_remove'), on_click=open_quick_remove_dialog, color='negative')
                     
-                    table = ui.table(columns=columns, rows=get_all_providers_as_dict(), row_key='id').classes('w-full mt-4')
+                    table = ui.table(columns=columns, rows=get_all_providers_as_dict(), row_key='id', pagination=20).classes('w-full mt-4')
                     
                     table.add_slot('body-cell-actions', '''
                         <q-td :props="props">
@@ -558,13 +699,16 @@ def create_ui():
 
                         def handle_edit():
                             url = edit_endpoint_input.value.strip()
-                            parsed = urlparse(url)
-                            # If there's no path component, assume it's a base URL and complete it
-                            if not parsed.path or parsed.path == '/':
-                                final_endpoint = f"{url.rstrip('/')}/v1/chat/completions"
+                            if url.endswith('/v1') or url.endswith('/v1/'):
+                                final_endpoint = f"{url.rstrip('/')}/chat/completions"
                                 ui.notify(f"Endpoint auto-completed to: {final_endpoint}", color='info')
                             else:
-                                final_endpoint = url
+                                parsed = urlparse(url)
+                                if not parsed.path or parsed.path == '/':
+                                    final_endpoint = f"{url.rstrip('/')}/v1/chat/completions"
+                                    ui.notify(f"Endpoint auto-completed to: {final_endpoint}", color='info')
+                                else:
+                                    final_endpoint = url
                             
                             provider_data = {
                                 "name": edit_name_input.value,
@@ -622,87 +766,197 @@ def create_ui():
                         db.expire_all()
                         groups = crud.get_groups(db)
                         providers = crud.get_providers(db)
+                        
+                        # Convert providers to dictionaries to avoid DetachedInstanceError
+                        providers_dicts = [
+                            {key: getattr(p, key) for key in p.__table__.columns.keys()}
+                            for p in providers
+                        ]
+                        
                         group_data = []
                         for group in groups:
                             associations = db.query(models.provider_group_association).filter_by(group_id=group.id).all()
                             group_providers = {assoc.provider_id: {"priority": assoc.priority} for assoc in associations}
                             group_data.append({'id': group.id, 'name': group.name, 'providers': group_providers})
-                        return group_data, providers
+                        return group_data, providers_dicts
 
-                    def build_groups_view():
+                    def build_groups_view(name_filter=None, endpoint_filter=None):
                         groups_container.clear()
-                        group_data, providers = get_groups_with_providers()
+                        group_data, all_providers = get_groups_with_providers()
 
                         if not group_data:
                             with groups_container:
                                 ui.label(get_text('no_groups_created'))
                             return
 
-                        def get_priority_style(p_value):
-                            if not isinstance(p_value, (int, float)): p_value = 1
-                            p_value = max(1, min(10, p_value))
-                            indicator_width = (11 - p_value) * 10
-                            return f'width: {indicator_width}%;'
+                        async def open_manage_dialog(group):
+                            with ui.dialog() as manage_dialog, ui.card().style('width: 90vw; max-width: 1000px; max-height: 90vh;').classes('p-0 flex flex-col no-wrap'):
+                                # --- FIXED HEADER ---
+                                with ui.row().classes('w-full items-center justify-between p-4 bg-gray-100 flex-shrink-0'):
+                                    ui.label(f"{get_text('manage_providers')}: {group['name']}").classes('text-h6')
+                                    ui.button(icon='close', on_click=manage_dialog.close).props('flat round')
+                                
+                                # --- SCROLLABLE CONTENT AREA ---
+                                with ui.column().classes('w-full flex-grow overflow-hidden p-0 gap-0'):
+                                    search_input = ui.input(placeholder=get_text('search_providers')).props('outlined dense icon="search"').classes('w-full px-4 py-2 bg-white flex-shrink-0')
+                                    
+                                    with ui.column().classes('w-full overflow-auto'):
+                                        table_columns = [
+                                            # Use 'model' as the primary field for the name column to enable model-based filtering
+                                            {'name': 'name', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
+                                            {'name': 'priority', 'label': get_text('priority'), 'field': 'priority', 'sortable': True, 'align': 'center', 'style': 'width: 320px'},
+                                        ]
 
-                        async def handle_save_group(group_data):
-                            initial_providers = group_data.get('providers', {})
-                            current_controls = group_data.get('controls', {})
-                            changes_made = False
-                            for pid, ctrls in current_controls.items():
-                                if ctrls['switch'].value:
-                                    new_priority = int(ctrls['priority'].value)
-                                    if pid not in initial_providers or initial_providers[pid].get('priority') != new_priority:
-                                        crud.add_provider_to_group(db, provider_id=pid, group_id=group_data['id'], priority=new_priority)
-                                        changes_made = True
-                                else:
-                                    if pid in initial_providers:
-                                        crud.remove_provider_from_group(db, provider_id=pid, group_id=group_data['id'])
-                                        changes_made = True
-                            if changes_made:
-                                ui.notify(get_text('group_updated').format(name=group_data['name']), color='positive')
-                                await refresh_groups_view()
-                            else:
-                                ui.notify(get_text('no_changes_to_save'))
-                        
+                                        # Prepare rows with smart sorting logic
+                                        rows = []
+                                        for p in all_providers:
+                                            pid = p['id']
+                                            is_selected = pid in group['providers']
+                                            raw_p = group['providers'].get(pid, {}).get('priority', 0)
+                                            priority = raw_p if 1 <= raw_p <= 5 else 0
+                                            rows.append({
+                                                'id': pid,
+                                                'name': p['name'],
+                                                'model': p['model'],
+                                                'selected': is_selected,
+                                                'priority': priority
+                                            })
+
+                                        def do_sort():
+                                            # Sort: priority 1 -> 5 first, then others
+                                            rows.sort(key=lambda r: (r['priority'] if r['priority'] > 0 else 999, r['name']))
+                                            m_table.update()
+
+                                        # Table inside scrollable column
+                                        m_table = ui.table(columns=table_columns, rows=rows, row_key='id', pagination={'rowsPerPage': 50}).classes('w-full px-2 shadow-none border-none')
+                                        m_table.bind_filter_from(search_input, 'value')
+
+                                        # Highlight row if selected and handle name click for general selection
+                                        m_table.add_slot('body-cell-name', '''
+                                            <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
+                                                <div class="column cursor-pointer" @click="$parent.$emit('toggle_select', props.row)">
+                                                    <div class="text-weight-bold">{{ props.row.model }}</div>
+                                                    <div class="text-caption text-grey-6">{{ props.row.name }}</div>
+                                                </div>
+                                            </q-td>
+                                        ''')
+
+                                        # 5 Mutually exclusive priority toggle buttons
+                                        m_table.add_slot('body-cell-priority', '''
+                                            <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
+                                                <div class="row q-gutter-x-sm justify-center no-wrap">
+                                                    <div v-for="p in [1,2,3,4,5]" :key="p" class="column items-center">
+                                                        <div class="text-bold text-blue-9" style="font-size: 10px; margin-bottom: -4px">P{{p}}</div>
+                                                        <q-toggle
+                                                            :model-value="props.row.priority === p"
+                                                            @update:model-value="val => $parent.$emit('set_p', {row: props.row, val: val ? p : 0})"
+                                                            dense
+                                                            size="sm"
+                                                            color="primary"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </q-td>
+                                        ''')
+
+                                        def handle_priority_change(e):
+                                            args = e.args
+                                            row_data = args['row']
+                                            val = args['val']
+                                            target_row = next((r for r in rows if r['id'] == row_data['id']), None)
+                                            if not target_row: return
+                                            if val > 0:
+                                                to_shift = [r for r in rows if r['id'] != target_row['id'] and 0 < r['priority'] <= 5 and r['priority'] >= val]
+                                                to_shift.sort(key=lambda x: x['priority'], reverse=True)
+                                                for r in to_shift:
+                                                    r['priority'] += 1
+                                                    if r['priority'] > 5:
+                                                        r['priority'] = 0
+                                                        r['selected'] = False # Unselect if pushed out of P5
+                                                target_row['priority'] = val
+                                                target_row['selected'] = True
+                                            else:
+                                                target_row['priority'] = 0
+                                                target_row['selected'] = False # Remove highlight when turned off
+                                            do_sort()
+
+                                        def handle_toggle_select(e):
+                                            row_data = e.args
+                                            target_row = next((r for r in rows if r['id'] == row_data['id']), None)
+                                            if target_row:
+                                                target_row['selected'] = not target_row['selected']
+                                                if not target_row['selected']:
+                                                    target_row['priority'] = 0
+                                                do_sort()
+
+                                        m_table.on('set_p', handle_priority_change)
+                                        m_table.on('toggle_select', handle_toggle_select)
+                                        do_sort()
+
+                                # --- FIXED FOOTER ---
+                                with ui.row().classes('w-full justify-end p-4 bg-gray-50 flex-shrink-0 border-t'):
+                                    async def save_management():
+                                        changes = False
+                                        for row in rows:
+                                            pid = row['id']
+                                            was_selected = pid in group['providers']
+                                            is_now_selected = row['selected']
+                                            new_p = row['priority'] if row['priority'] > 0 else 99
+                                            old_p = group['providers'].get(pid, {}).get('priority')
+                                            if is_now_selected:
+                                                if not was_selected or new_p != old_p:
+                                                    crud.add_provider_to_group(db, provider_id=pid, group_id=group['id'], priority=new_p)
+                                                    changes = True
+                                            elif was_selected:
+                                                crud.remove_provider_from_group(db, provider_id=pid, group_id=group['id'])
+                                                changes = True
+                                        if changes:
+                                            ui.notify(get_text('save_success'), color='positive')
+                                            manage_dialog.close()
+                                            await refresh_groups_view()
+
+                                    ui.button(get_text('cancel'), on_click=manage_dialog.close).props('flat')
+                                    ui.button(get_text('save'), on_click=save_management, color='primary').props('unelevated')
+                            
+                            manage_dialog.open()
+
                         async def open_delete_group_dialog(group_id, group_name):
                             with ui.dialog() as delete_dialog, ui.card():
                                 ui.label(get_text('delete_group_confirm').format(name=group_name))
-                                with ui.row():
+                                with ui.row().classes('w-full justify-end mt-4'):
                                     async def handle_delete():
                                         crud.delete_group(db, group_id)
                                         ui.notify(get_text('group_deleted').format(name=group_name), color='negative')
                                         delete_dialog.close()
                                         await refresh_groups_view()
+                                    ui.button(get_text('cancel'), on_click=delete_dialog.close).props('flat')
                                     ui.button(get_text('delete'), on_click=handle_delete, color='negative')
-                                    ui.button(get_text('cancel'), on_click=delete_dialog.close)
                             await delete_dialog
 
                         with groups_container:
                             for group in group_data:
-                                with ui.expansion(group['name'], icon='group').classes('w-full mb-2'):
+                                with ui.card().classes('w-full mb-4 p-4'):
                                     with ui.row().classes('w-full items-center'):
-                                        ui.label(f"{get_text('group_id')}: {group['id']}").classes('text-caption')
+                                        with ui.column().classes('gap-0'):
+                                            ui.label(group['name']).classes('text-h6')
+                                            member_count = len(group['providers'])
+                                            ui.label(f"{get_text('id')}: {group['id']} | {member_count} {get_text('providers')}").classes('text-caption text-gray-500')
                                         ui.space()
-                                        ui.button(icon='delete', on_click=lambda g=group: open_delete_group_dialog(g['id'], g['name']), color='negative').props('flat dense')
-
-                                    with ui.grid().classes('w-full grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2'):
-                                        group['controls'] = {}
-                                        for provider in providers:
-                                            with ui.card().classes('p-2'):
-                                                is_member = provider.id in group['providers']
-                                                switch = ui.switch(provider.name, value=is_member).classes('w-full')
-                                                ui.label(f"{get_text('model')}: {provider.model}").classes('text-xs ml-1')
-                                                priority = group['providers'].get(provider.id, {}).get('priority', 1)
-                                                with ui.element('div').classes('w-full'):
-                                                    number_input = ui.number(get_text('priority'), value=priority, min=1, max=10, format='%.0f').props('outlined dense style="width: 100%;"').classes('bg-white')
-                                                    with ui.element('div').classes('w-full h-1.5 bg-gray-200 rounded-full mt-1'):
-                                                        indicator_bar = ui.element('div').classes('h-1.5 rounded-full transition-all duration-300').style('background-color: #2F6BFF')
-                                                indicator_bar.style(get_priority_style(priority))
-                                                number_input.on('update:model-value', lambda e, bar=indicator_bar: bar.style(get_priority_style(e.args)))
-                                                group['controls'][provider.id] = {'switch': switch, 'priority': number_input}
-
-                                    with ui.row().classes('w-full mt-2 justify-end'):
-                                        ui.button(get_text('save_changes'), on_click=lambda g=group: handle_save_group(g)).props('color="primary"')
+                                        with ui.row().classes('gap-2'):
+                                            ui.button(get_text('manage_providers'), icon='settings', on_click=lambda g=group: open_manage_dialog(g)).props('outline color="primary"')
+                                            ui.button(icon='delete', on_click=lambda g=group: open_delete_group_dialog(g['id'], g['name']), color='negative').props('flat round')
+                                    
+                                    if group['providers']:
+                                        with ui.row().classes('w-full mt-2 gap-2'):
+                                            # Show top 10 models as badges
+                                            sorted_pids = sorted(group['providers'].keys(), key=lambda x: group['providers'][x]['priority'])
+                                            for pid in sorted_pids[:10]:
+                                                p_obj = next((p for p in all_providers if p['id'] == pid), None)
+                                                if p_obj:
+                                                    priority = group['providers'][pid]['priority']
+                                                    ui.badge(f"P{priority}: {p_obj['name']}.{p_obj['model']}").props('color="blue-2" text-color="blue-9"').classes('px-2 py-1')
+                                            if len(sorted_pids) > 10:
+                                                ui.badge(f"+ {len(sorted_pids)-10} ...").props('color="grey-4" text-color="grey-8"')
 
                     async def refresh_groups_view():
                         async with loading_animation():
@@ -1005,11 +1259,16 @@ def create_ui():
                     ui.button(get_text('create_api_key'), on_click=add_key_dialog.open, color='primary').classes('mb-4')
                     
                     keys_table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
-                    keys_table.add_slot('body-cell-key_display', '''
+                    keys_table.add_slot('body-cell-key_display', f'''
                         <q-td :props="props">
                             <div class="row items-center no-wrap">
-                                <span>{{ props.row.key_display }}</span>
-                                <q-btn @click="$parent.$emit('copy-key', props.row.key)" icon="content_copy" flat dense color="primary" class="cursor-pointer" />
+                                <span>{{{{ props.row.key_display }}}}</span>
+                                <q-btn @click="$parent.$emit('view-key', props.row.key)" icon="visibility" flat dense color="primary" class="cursor-pointer">
+                                    <q-tooltip>{get_text('view_key')}</q-tooltip>
+                                </q-btn>
+                                <q-btn @click="$parent.$emit('copy-key', props.row.key)" icon="content_copy" flat dense color="primary" class="cursor-pointer">
+                                    <q-tooltip>{get_text('copy_tooltip')}</q-tooltip>
+                                </q-btn>
                             </div>
                         </q-td>
                     ''')
@@ -1083,6 +1342,11 @@ def create_ui():
                         ui.run_javascript(f"navigator.clipboard.writeText('{key_to_copy}')")
                         ui.notify(get_text('copied_to_clipboard'), color='positive')
 
+                    def handle_view_key(e):
+                        key = e.args
+                        ui.notify(f"Key: {key}", color='info', duration=10)
+
+                    keys_table.on('view-key', handle_view_key)
                     keys_table.on('copy-key', handle_copy_key)
                     keys_table.on('edit_key', open_edit_key_dialog)
                     keys_table.on('toggle_key', handle_toggle_key)
