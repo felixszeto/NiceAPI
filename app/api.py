@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import asyncio
 import json
-from . import crud, models, schemas, router as smart_router
+from . import crud, models, schemas, router as smart_router, utils
 from .database import get_db, SessionLocal
 from fastapi.responses import StreamingResponse
 import time
@@ -52,6 +52,36 @@ def get_api_key_from_bearer(
     # Update last used timestamp
     crud.update_api_key_last_used(db, db_api_key.id)
     
+    return db_api_key
+
+# Dependency to get API key from Anthropic's custom header
+def get_api_key_from_anthropic_header(
+    db: Session = Depends(get_db),
+    x_api_key: Optional[str] = Header(None, alias="x-api-key"),
+    authorization: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
+) -> models.APIKey:
+    """
+    Validates the API key from 'x-api-key' header OR 'Authorization: Bearer' header.
+    """
+    api_key_str = x_api_key
+    if not api_key_str and authorization:
+        api_key_str = authorization.credentials
+
+    if not api_key_str:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"message": "No API key provided.", "type": "authentication_error"}},
+        )
+
+    db_api_key = crud.get_api_key_by_key(db, key=api_key_str)
+
+    if not db_api_key or not db_api_key.is_active:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"message": "Invalid API key.", "type": "authentication_error"}},
+        )
+    
+    crud.update_api_key_last_used(db, db_api_key.id)
     return db_api_key
 
 
@@ -111,9 +141,12 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
     if request.model in authorized_group_names:
         matched_group_name = request.model
     else:
-        # Try to find a group that ends with /requested_model
+        # Try to find a group that ends with /requested_model or matches common variations
         for name in authorized_group_names:
-            if name.endswith(f"/{request.model}"):
+            if (name.endswith(f"/{request.model}") or
+                request.model.endswith(f"/{name}") or
+                name == request.model.replace("claude-", "anthropic/") or
+                name == request.model.replace("gpt-", "openai/")):
                 matched_group_name = name
                 logger.info(f"Mapping requested model '{request.model}' to authorized group '{matched_group_name}'")
                 break
@@ -134,6 +167,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
     if request.stream:
         async def stream_generator():
             excluded_provider_ids = []
+            in_think_block = False
             while True:
                 # The select_provider function now looks up providers by the group name in request.model
                 provider = smart_router.select_provider(db, request, excluded_provider_ids=excluded_provider_ids)
@@ -180,12 +214,30 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                 continue
 
                             async for chunk in response.aiter_bytes():
-                                chunk_text = chunk.decode('utf-8', errors='ignore').lower()
-                                full_response_text += chunk_text
+                                chunk_raw = chunk.decode('utf-8', errors='ignore')
+                                chunk_text_lower = chunk_raw.lower()
+                                full_response_text += chunk_text_lower
                                 for keyword in failure_keywords:
                                     if keyword in full_response_text:
                                         raise ValueError(f"Failure keyword found: '{keyword}'")
-                                yield chunk
+                                
+                                # Basic <think> tag filtering for streaming
+                                if "<think>" in chunk_raw:
+                                    in_think_block = True
+                                    parts = chunk_raw.split("<think>")
+                                    # Yield part before <think>
+                                    if parts[0]: yield parts[0].encode('utf-8')
+                                    continue
+                                
+                                if "</think>" in chunk_raw:
+                                    in_think_block = False
+                                    parts = chunk_raw.split("</think>")
+                                    # Yield part after </think>
+                                    if len(parts) > 1 and parts[1]: yield parts[1].encode('utf-8')
+                                    continue
+
+                                if not in_think_block:
+                                    yield chunk
                             
                             end_time = time.time()
                             crud.create_call_log(db, schemas.CallLogCreate(
@@ -262,7 +314,8 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 ))
                 logger.info(f"--- Non-streaming Response Success (Provider ID: {provider.id}) ---")
                 logger.info(f"Response JSON: {json.dumps(response_json)}")
-                return response_json
+                # Sanitize response to remove non-standard fields and <think> tags
+                return utils.sanitize_openai_response(response_json)
 
             except (httpx.RequestError, ValueError) as e:
                 end_time = time.time()
@@ -406,3 +459,207 @@ def get_models_list(db: Session = Depends(get_db), api_key: models.APIKey = Depe
     data = [schemas.ModelResponse(id=group_name) for group_name in sorted(list(authorized_groups))]
     
     return schemas.ModelListResponse(data=data)
+
+@router.post("/v1/responses")
+async def responses_proxy(request: schemas.ChatRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
+    """
+    OpenAI compatible endpoint /v1/responses.
+    Internally redirects to /v1/chat/completions logic.
+    """
+    return await chat(request, db, api_key)
+
+@router.post("/v1/messages")
+async def messages_proxy(request: schemas.AnthropicChatRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_anthropic_header)):
+    """
+    Anthropic compatible endpoint /v1/messages.
+    Converts Anthropic request to OpenAI format, calls internal chat logic,
+    and converts back to Anthropic response.
+    """
+    # 1. Convert Anthropic request to OpenAI-style ChatRequest
+    openai_messages = []
+    
+    # Handle optional system prompt (can be string or list of blocks)
+    if request.system:
+        system_content = ""
+        if isinstance(request.system, str):
+            system_content = request.system
+        else:
+            system_content = " ".join([block.text for block in request.system if block.type == "text" and block.text])
+        
+        if system_content:
+            openai_messages.append(schemas.ChatMessage(role="system", content=system_content))
+    
+    for msg in request.messages:
+        content_str = ""
+        if isinstance(msg.content, str):
+            content_str = msg.content
+        else:
+            # Concatenate text blocks
+            content_str = " ".join([block.text for block in msg.content if block.type == "text"])
+        
+        openai_messages.append(schemas.ChatMessage(role=msg.role, content=content_str))
+
+    chat_request = schemas.ChatRequest(
+        messages=openai_messages,
+        model=request.model,
+        stream=request.stream
+    )
+
+    # 2. Call internal chat logic
+    if request.stream:
+        # Basic OpenAI to Anthropic stream transformer
+        async def anthropic_stream_generator():
+            openai_response = await chat(chat_request, db, api_key)
+            if not isinstance(openai_response, StreamingResponse):
+                yield f"data: {json.dumps({'type': 'error', 'error': {'type': 'api_error', 'message': 'Expected streaming response'}})}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'message_start', 'message': {'id': 'msg_start', 'type': 'message', 'role': 'assistant', 'content': [], 'model': request.model, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+            yield f"data: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+
+            async for line in openai_response.body_iterator:
+                if isinstance(line, bytes):
+                    line = line.decode('utf-8')
+                
+                if line.startswith("data: "):
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    
+                    try:
+                        data = json.loads(data_str)
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        if "content" in delta:
+                            content = delta["content"]
+                            # Basic filtering of <think> tags in stream
+                            content = utils.filter_think_tag_from_chunk(content)
+                            if content:
+                                yield f"data: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': content}})}\n\n"
+                    except:
+                        continue
+
+            yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+            yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
+            yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+
+        return StreamingResponse(anthropic_stream_generator(), media_type="text/event-stream")
+
+    response_json = await chat(chat_request, db, api_key)
+    
+    # 3. Convert OpenAI response back to Anthropic response
+    # response_json is the dict returned by chat()
+    
+    choices = response_json.get("choices", [])
+    assistant_message = ""
+    if choices:
+        assistant_message = choices[0].get("message", {}).get("content", "")
+
+    usage = response_json.get("usage", {})
+    
+    anthropic_response = schemas.AnthropicChatResponse(
+        id=response_json.get("id", "msg_" + response_json.get("id", "none")),
+        role="assistant",
+        content=[schemas.AnthropicContent(type="text", text=assistant_message)],
+        model=response_json.get("model", request.model),
+        usage=schemas.AnthropicUsage(
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0)
+        )
+    )
+
+    return anthropic_response
+
+@router.post("/v1/completions")
+async def completions(request: schemas.CompletionRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
+    """
+    OpenAI legacy completions API.
+    """
+    # Use chat logic but wrap/unwrap as needed or just forward if provider supports it.
+    # For now, we reuse select_provider logic.
+    excluded_provider_ids = []
+    while True:
+        # Create a dummy ChatRequest for provider selection
+        dummy_request = schemas.ChatRequest(model=request.model, messages=[], stream=request.stream)
+        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="All suitable providers failed or are unavailable.")
+
+        start_time = time.time()
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/completions")
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
+            payload = request.dict(exclude_unset=True)
+            payload['model'] = provider.model
+            
+            async with httpx.AsyncClient(timeout=300) as client:
+                response = await client.post(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+            
+            response_json = response.json()
+            # Log success
+            crud.create_call_log(db, schemas.CallLogCreate(
+                provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
+                status_code=response.status_code, response_time_ms=int((time.time() - start_time) * 1000),
+                response_body=json.dumps(response_json)
+            ))
+            return response_json
+        except Exception as e:
+            excluded_provider_ids.append(provider.id)
+            continue
+
+@router.post("/v1/embeddings")
+async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
+    """
+    OpenAI Embeddings API.
+    """
+    excluded_provider_ids = []
+    while True:
+        dummy_request = schemas.ChatRequest(model=request.model, messages=[])
+        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for embeddings.")
+
+        start_time = time.time()
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/embeddings")
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
+            payload = request.dict(exclude_unset=True)
+            payload['model'] = provider.model
+            
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+            
+            return response.json()
+        except Exception as e:
+            excluded_provider_ids.append(provider.id)
+            continue
+
+@router.post("/v1/images/generations")
+async def image_generation(request: schemas.ImageGenerationRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
+    """
+    OpenAI Image Generation API.
+    """
+    excluded_provider_ids = []
+    while True:
+        # Use 'dall-e-3' or similar if model not specified
+        model_name = request.model or "dall-e-3"
+        dummy_request = schemas.ChatRequest(model=model_name, messages=[])
+        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for image generation.")
+
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/images/generations")
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
+            payload = request.dict(exclude_unset=True)
+            payload['model'] = provider.model
+            
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+            
+            return response.json()
+        except Exception as e:
+            excluded_provider_ids.append(provider.id)
+            continue

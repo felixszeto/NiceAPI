@@ -62,13 +62,50 @@ class ModelImportRequest(BaseModel):
 # Schema for the main chat request
 class ChatMessage(BaseModel):
     role: str
-    content: Union[str, List[Any]]
+    content: Optional[Union[str, List[Any]]] = None
+    tool_calls: Optional[List[Any]] = None
+    function_call: Optional[Any] = None
+    name: Optional[str] = None
+    tool_call_id: Optional[str] = None
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     model: Optional[str] = None
     type: Optional[str] = None
     stream: Optional[bool] = False
+
+    class Config:
+        extra = "allow"
+
+# Schema for legacy Completions API
+class CompletionRequest(BaseModel):
+    model: str
+    prompt: Union[str, List[str]]
+    suffix: Optional[str] = None
+    max_tokens: Optional[int] = 16
+    temperature: Optional[float] = 1.0
+    top_p: Optional[float] = 1.0
+    n: Optional[int] = 1
+    stream: Optional[bool] = False
+    logprobs: Optional[int] = None
+    stop: Optional[Union[str, List[str]]] = None
+
+# Schema for Embeddings API
+class EmbeddingRequest(BaseModel):
+    model: str
+    input: Union[str, List[str], List[int], List[List[int]]]
+    user: Optional[str] = None
+
+# Schema for Image Generation API
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    model: Optional[str] = "dall-e-2"
+    n: Optional[int] = 1
+    quality: Optional[str] = "standard"
+    size: Optional[str] = "1024x1024"
+    style: Optional[str] = "vivid"
+    response_format: Optional[str] = "url"
+    user: Optional[str] = None
 
 # Schema for ErrorMaintenance
 class ErrorKeywordBase(BaseModel):
@@ -153,3 +190,44 @@ class SettingCreate(SettingBase):
 class Setting(SettingBase):
     class Config:
         from_attributes = True
+
+# --- Anthropic Compatible Schemas ---
+
+class AnthropicContent(BaseModel):
+    type: str = "text"
+    text: Optional[str] = None
+    
+    class Config:
+        extra = "allow"
+
+class AnthropicMessage(BaseModel):
+    role: str
+    content: Union[str, List[AnthropicContent]]
+
+class AnthropicChatRequest(BaseModel):
+    model: str
+    messages: List[AnthropicMessage]
+    system: Optional[Union[str, List[AnthropicContent]]] = None
+    max_tokens: Optional[int] = 4096
+    stop_sequences: Optional[List[str]] = None
+    stream: Optional[bool] = False
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+
+    class Config:
+        extra = "allow"
+
+class AnthropicUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+class AnthropicChatResponse(BaseModel):
+    id: str
+    type: str = "message"
+    role: str = "assistant"
+    content: List[AnthropicContent]
+    model: str
+    stop_reason: Optional[str] = "end_turn"
+    stop_sequence: Optional[str] = None
+    usage: AnthropicUsage

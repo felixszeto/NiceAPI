@@ -34,6 +34,7 @@ i18n = {
     "no_cost_data": {"en": "No cost data available.", "zh-TW": "沒有成本資料。", "zh-CN": "没有成本数据。", "ko": "비용 데이터가 없습니다.", "ja": "コストデータがありません。"},
     "refresh_data": {"en": "Refresh Data", "zh-TW": "重新整理資料", "zh-CN": "刷新数据", "ko": "데이터 새로고침", "ja": "データを更新"},
     "add_provider": {"en": "Add Provider", "zh-TW": "新增供應商", "zh-CN": "新增供应商", "ko": "공급자 추가", "ja": "プロバイダーを追加"},
+    "add_single_model": {"en": "Add Single Model", "zh-TW": "新增單個模型", "zh-CN": "新增单个模型", "ko": "단일 모델 추가", "ja": "単一モデルを追加"},
     "import_from_url": {"en": "Import From URL", "zh-TW": "從 URL 匯入", "zh-CN": "从 URL 导入", "ko": "URL에서 가져오기", "ja": "URLからインポート"},
     "quick_remove": {"en": "Quick Remove", "zh-TW": "快速移除", "zh-CN": "快速移除", "ko": "빠른 제거", "ja": "クイック削除"},
     "add_new_provider": {"en": "Add New Provider", "zh-TW": "新增供應商", "zh-CN": "新增供应商", "ko": "새 공급자 추가", "ja": "新しいプロバイダーを追加"},
@@ -150,8 +151,9 @@ i18n = {
     "refresh_providers": {"en": "Refresh Providers", "zh-TW": "重新整理供應商", "zh-CN": "刷新供应商", "ko": "공급자 새로고침", "ja": "プロバイダーを更新"},
     "refresh_api_keys": {"en": "Refresh API Keys", "zh-TW": "重新整理 API 金鑰", "zh-CN": "刷新 API 密钥", "ko": "API 키 새로고침", "ja": "APIキーを更新"},
     "refresh_keywords": {"en": "Refresh Keywords", "zh-TW": "重新整理關鍵字", "zh-CN": "刷新关键字", "ko": "키워드 새로고침", "ja": "キーワードを更新"},
-    "filter_by_name": {"en": "Filter by Name/Alias", "zh-TW": "按名稱/別名篩選", "zh-CN": "按名称/別名筛选", "ko": "이름/별칭으로 필터링", "ja": "名前/エイリアスでフィルター"},
-    "filter_by_endpoint": {"en": "Filter by Endpoint", "zh-TW": "按端點篩選", "zh-CN": "按端点筛选", "ko": "엔드포인트로 필터링", "ja": "エンドポイントでフィルター"},
+    "filter_by_name": {"en": "Filter by Name/Alias", "zh-TW": "按名稱/別名篩選", "zh-CN": "按名称/別名筛选", "ko": "이름/別칭으로 필터링", "ja": "名前/エイリアスでフィルター"},
+    "filter_by_endpoint": {"en": "Filter by Endpoint", "zh-TW": "按端點篩選", "zh-CN": "按端点筛选", "ko": "엔드포인트로 필터링", "ja": "엔드포인트로 필터링"},
+    "search_models": {"en": "Search Alias or Model Name", "zh-TW": "搜尋別名或模型名稱", "zh-CN": "搜索别名或模型名称", "ko": "별칭 또는 모델 이름 검색", "ja": "エイリアスまたは模型名で検索"},
     "manage_providers": {"en": "Manage Providers", "zh-TW": "管理供應商項目", "zh-CN": "管理供应商项目", "ko": "공급자 관리", "ja": "プロバイダーの管理"},
     "selected": {"en": "Selected", "zh-TW": "已選取", "zh-CN": "已選取", "ko": "선택됨", "ja": "選択済み"},
     "search_providers": {"en": "Search providers...", "zh-TW": "搜尋供應商...", "zh-CN": "搜索供应商...", "ko": "공급자 검색...", "ja": "プロバイダーを検索..."},
@@ -174,6 +176,7 @@ i18n = {
     "remote": {"en": "Remote Management", "zh-TW": "遠端管理", "zh-CN": "远程管理", "ko": "원격 관리", "ja": "リモート管理"},
     "move_up": {"en": "Move Up", "zh-TW": "上移", "zh-CN": "上移", "ko": "위로 이동", "ja": "上に移動"},
     "move_down": {"en": "Move Down", "zh-TW": "下移", "zh-CN": "下移", "ko": "아래로 이동", "ja": "下に移動"},
+    "move_to_top": {"en": "Move to Top", "zh-TW": "置頂", "zh-CN": "置顶", "ko": "맨 위로 이동", "ja": "トップへ移動"},
 }
 
 def get_text(key: str) -> str:

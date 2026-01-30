@@ -63,17 +63,20 @@ def create_ui():
             # This is the main content of the application.
             # It's only shown if the user is authenticated.
             
-            def get_all_providers_as_dict(name_filter=None, endpoint_filter=None):
-                providers = crud.get_providers(db, name_filter=name_filter, endpoint_filter=endpoint_filter)
-                return [
+            def get_all_providers_as_dict(search_query=None):
+                providers = crud.get_providers(db)
+                rows = [
                     {key: getattr(p, key) for key in p.__table__.columns.keys()}
                     for p in providers
                 ]
+                if search_query:
+                    q = search_query.lower()
+                    rows = [r for r in rows if q in r['name'].lower() or q in r['model'].lower()]
+                return rows
 
             def refresh_providers_table():
                 table.rows = get_all_providers_as_dict(
-                    name_filter=provider_name_filter.value if 'provider_name_filter' in locals() else None,
-                    endpoint_filter=provider_endpoint_filter.value if 'provider_endpoint_filter' in locals() else None
+                    search_query=provider_search_filter.value if 'provider_search_filter' in locals() else None
                 )
                 table.update()
 
@@ -371,16 +374,14 @@ def create_ui():
                 with ui.tab_panel(providers_tab):
                     async def refresh_providers_table_async():
                         async with loading_animation():
-                            table.update_rows(get_all_providers_as_dict())
+                            refresh_providers_table()
                         ui.notify(get_text('providers_refreshed'), color='positive')
 
-                    with ui.row().classes('w-full items-center mb-4'):
+                    with ui.row().classes('w-full items-center mb-4 gap-4'):
                         ui.label(get_text('providers')).classes('text-h6')
                         ui.space()
                         with ui.row().classes('items-center gap-2'):
-                            provider_name_filter = ui.input(placeholder=get_text('filter_by_name')).props('outlined dense').on('update:model-value', refresh_providers_table)
-                            provider_endpoint_filter = ui.input(placeholder=get_text('filter_by_endpoint')).props('outlined dense').on('update:model-value', refresh_providers_table)
-                        ui.button(get_text('refresh_providers'), on_click=refresh_providers_table_async, icon='refresh', color='primary').props('flat')
+                            provider_search_filter = ui.input(placeholder=get_text('search_models')).props('outlined dense icon="search"').classes('w-64').on('update:model-value', refresh_providers_table)
                         
                         async def open_sync_models_dialog():
                             providers = crud.get_providers(db)
@@ -492,23 +493,53 @@ def create_ui():
                             
                             sync_dialog.open()
 
-                        ui.button(get_text('sync_models'), on_click=open_sync_models_dialog, icon='sync', color='primary').props('flat')
-
-                    # Add Provider Dialog
+                    # Add Provider Dialog (Combined Single & Batch)
                     with ui.dialog() as add_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
-                        ui.label(get_text('add_new_provider')).classes('text-h6')
-                        with ui.column().classes('w-full'):
-                            name_input = ui.input(get_text('name'), placeholder=get_text('provider_name_hint')).props('filled').classes('w-full')
-                            endpoint_input = ui.input(get_text('api_endpoint'), placeholder=get_text('endpoint_hint')).props('filled').classes('w-full')
-                            key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
-                            model_input = ui.input(get_text('model'), placeholder=get_text('model_hint')).props('filled').classes('w-full')
-                            price_input = ui.number(get_text('price_per_million_tokens'), placeholder=get_text('price_hint')).props('filled').classes('w-full')
-                            type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('type')).props('filled').classes('w-full')
-                            active_toggle = ui.switch(get_text('active'), value=True)
+                        with ui.tabs().classes('w-full') as add_tabs:
+                            batch_tab = ui.tab(get_text('add_provider'))
+                            single_tab = ui.tab(get_text('add_single_model'))
+                        
+                        with ui.tab_panels(add_tabs, value=batch_tab).classes('w-full'):
+                            with ui.tab_panel(batch_tab):
+                                with ui.column().classes('w-full'):
+                                    base_url_input = ui.input(get_text('base_url'), placeholder=get_text('base_url_hint')).props('filled').classes('w-full')
+                                    api_key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
+                                    alias_input = ui.input(get_text('alias_optional'), placeholder=get_text('alias_hint')).props('filled').classes('w-full')
+                                    default_type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('default_type')).props('filled').classes('w-full')
+                                    with ui.row().classes('w-full no-wrap'):
+                                        filter_mode_select = ui.select(['None', 'Include', 'Exclude'], value='None', label=get_text('filter_mode')).props('filled').classes('w-1/3')
+                                        filter_keyword_input = ui.input(get_text('model_name_filter'), placeholder=get_text('filter_hint')).props('filled').classes('flex-grow')
+                                    
+                                    with ui.element('div').classes('w-full relative h-6') as progress_container:
+                                        progress = ui.linear_progress(value=0, show_value=False).props('rounded size="25px" color="positive" striped').classes('w-full h-full')
+                                        progress_label = ui.label('0.0%').classes('absolute-full flex flex-center text-white font-medium')
+                                    progress_container.visible = False
+                                    
+                                    with ui.row().classes('w-full justify-end mt-4'):
+                                        ui.button(get_text('cancel'), on_click=add_dialog.close).props('flat')
+                                        ui.button(get_text('import'), on_click=lambda: handle_import(), color='primary')
 
-                        def handle_add():
+                            with ui.tab_panel(single_tab):
+                                with ui.column().classes('w-full'):
+                                    name_input = ui.input(get_text('name'), placeholder=get_text('provider_name_hint')).props('filled').classes('w-full')
+                                    endpoint_input = ui.input(get_text('api_endpoint'), placeholder=get_text('endpoint_hint')).props('filled').classes('w-full')
+                                    key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
+                                    model_input = ui.input(get_text('model'), placeholder=get_text('model_hint')).props('filled').classes('w-full')
+                                    price_input = ui.number(get_text('price_per_million_tokens'), placeholder=get_text('price_hint')).props('filled').classes('w-full')
+                                    type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('type')).props('filled').classes('w-full')
+                                    active_toggle = ui.switch(get_text('active'), value=True)
+                                    
+                                    with ui.row().classes('w-full justify-end mt-4'):
+                                        ui.button(get_text('cancel'), on_click=add_dialog.close).props('flat')
+                                        ui.button(get_text('add'), on_click=lambda: handle_add_single(), color='primary')
+                        
+                        def handle_add_single():
+                            # Validation
+                            if not name_input.value or not endpoint_input.value or not key_input.value or not model_input.value:
+                                ui.notify("Please fill in all required fields (Name, Endpoint, Key, Model).", color='warning')
+                                return
+
                             url = endpoint_input.value.strip()
-                            # Automatically append /chat/completions if the URL ends with /v1 or a variant
                             if url.endswith('/v1') or url.endswith('/v1/'):
                                 final_endpoint = f"{url.rstrip('/')}/chat/completions"
                                 ui.notify(f"Endpoint auto-completed to: {final_endpoint}", color='info')
@@ -529,45 +560,17 @@ def create_ui():
                                 type=type_select.value,
                                 is_active=active_toggle.value
                             )
-                            
-                            # Rigorous duplicate check: endpoint + key + model
-                            existing = db.query(models.ApiProvider).filter(
-                                models.ApiProvider.api_endpoint == final_endpoint,
-                                models.ApiProvider.api_key == key_input.value,
-                                models.ApiProvider.model == model_input.value
-                            ).first()
-                            
-                            if existing:
-                                ui.notify(f"Provider with this endpoint, key, and model already exists (ID: {existing.id})", color='warning')
-                                return
-
                             crud.create_provider(db, provider_data)
                             ui.notify(get_text('provider_added').format(name=name_input.value), color='positive')
                             refresh_providers_table()
                             add_dialog.close()
 
-                        with ui.row():
-                            ui.button(get_text('add'), on_click=handle_add, color='primary')
-                            ui.button(get_text('cancel'), on_click=add_dialog.close)
-
-                    # Import Models Dialog
-                    with ui.dialog() as import_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
-                        ui.label(get_text('import_models_from_url')).classes('text-h6')
-                        with ui.column().classes('w-full'):
-                            base_url_input = ui.input(get_text('base_url'), placeholder=get_text('base_url_hint')).props('filled').classes('w-full')
-                            api_key_input = ui.input(get_text('api_key'), placeholder='sk-xxxxxxxxxxxxxxxxxxxx', password=True).props('filled').classes('w-full')
-                            alias_input = ui.input(get_text('alias_optional'), placeholder=get_text('alias_hint')).props('filled').classes('w-full')
-                            default_type_select = ui.select(['per_token', 'per_call'], value='per_token', label=get_text('default_type')).props('filled').classes('w-full')
-                            with ui.row().classes('w-full no-wrap'):
-                                filter_mode_select = ui.select(['None', 'Include', 'Exclude'], value='None', label=get_text('filter_mode')).props('filled').classes('w-1/3')
-                                filter_keyword_input = ui.input(get_text('model_name_filter'), placeholder=get_text('filter_hint')).props('filled').classes('flex-grow')
-                        
-                        with ui.element('div').classes('w-full relative h-6') as progress_container:
-                            progress = ui.linear_progress(value=0, show_value=False).props('rounded size="25px" color="positive" striped').classes('w-full h-full')
-                            progress_label = ui.label('0.0%').classes('absolute-full flex flex-center text-white font-medium')
-                        progress_container.visible = False
-
                         async def handle_import():
+                            # Validation
+                            if not base_url_input.value or not api_key_input.value:
+                                ui.notify("Please fill in both Base URL and API Key.", color='warning')
+                                return
+
                             progress_container.visible = True
                             progress.value = 0
                             progress_label.text = '0.0%'
@@ -611,7 +614,7 @@ def create_ui():
                                                     ui.notify(final_message, color='positive')
                                                     refresh_providers_table()
                                                     await asyncio.sleep(1)
-                                                    import_dialog.close()
+                                                    add_dialog.close()
                                                 elif data.startswith('ERROR='):
                                                     error_message = data.split('=', 1)[1]
                                                     ui.notify(error_message, color='negative')
@@ -626,9 +629,6 @@ def create_ui():
                                 progress_label.text = '0.0%'
 
 
-                        with ui.row():
-                            ui.button(get_text('import'), on_click=handle_import, color='primary')
-                            ui.button(get_text('cancel'), on_click=import_dialog.close)
 
                     def open_quick_remove_dialog():
                         with ui.dialog() as dialog, ui.card().style('width: 60vw; max-width: 800px;'):
@@ -671,10 +671,11 @@ def create_ui():
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
                     ]
                     
-                    with ui.row().classes('items-center gap-2'):
-                        ui.button(get_text('add_provider'), on_click=add_dialog.open, color='primary')
-                        ui.button(get_text('import_from_url'), on_click=import_dialog.open, color='primary')
-                        ui.button(get_text('quick_remove'), on_click=open_quick_remove_dialog, color='negative')
+                    with ui.row().classes('items-center gap-2 mb-4'):
+                        ui.button(get_text('add_provider'), on_click=add_dialog.open, color='primary', icon='add').props('unelevated')
+                        ui.button(get_text('sync_models'), on_click=open_sync_models_dialog, icon='sync', color='primary').props('outline')
+                        ui.button(get_text('refresh_providers'), on_click=refresh_providers_table_async, icon='refresh', color='primary').props('flat')
+                        ui.button(get_text('quick_remove'), on_click=open_quick_remove_dialog, color='negative', icon='delete_sweep').props('flat')
                     
                     table = ui.table(columns=columns, rows=get_all_providers_as_dict(), row_key='id', pagination=20).classes('w-full mt-4')
                     
@@ -1277,6 +1278,9 @@ def create_ui():
                     keys_table.add_slot('body-cell-actions', '''
                         <q-td :props="props">
                             <q-btn @click="$parent.$emit('edit_key', props.row)" icon="edit" flat dense color="primary" />
+                            <q-btn @click="$parent.$emit('open_remote', props.row.key)" icon="open_in_new" flat dense color="info">
+                                <q-tooltip>Open Remote Management</q-tooltip>
+                            </q-btn>
                             <q-btn @click="$parent.$emit('toggle_key', props.row)" :icon="props.row.is_active ? 'toggle_on' : 'toggle_off'" flat dense :color="props.row.is_active ? 'positive' : 'grey'" />
                             <q-btn @click="$parent.$emit('delete_key', props.row)" icon="delete" flat dense color="negative" />
                         </q-td>
@@ -1348,8 +1352,13 @@ def create_ui():
                         key = e.args
                         ui.notify(f"Key: {key}", color='info', duration=10)
 
+                    def handle_open_remote(e):
+                        key = e.args
+                        ui.navigate.to(f'/remote?key={key}', new_tab=True)
+
                     keys_table.on('view-key', handle_view_key)
                     keys_table.on('copy-key', handle_copy_key)
+                    keys_table.on('open_remote', handle_open_remote)
                     keys_table.on('edit_key', open_edit_key_dialog)
                     keys_table.on('toggle_key', handle_toggle_key)
                     keys_table.on('delete_key', open_delete_key_dialog)
@@ -1464,6 +1473,7 @@ def create_ui():
                         with username.add_slot('prepend'):
                             ui.icon('o_person', color='white').classes('flex-center')
                         username.on('update:model-value', lambda: setattr(username, 'error', None))
+                        username.on('keydown.enter', try_login)
 
                         # Password Input
                         password = ui.input(placeholder=get_text('password'), password=True) \
@@ -1472,6 +1482,7 @@ def create_ui():
                         with password.add_slot('prepend'):
                             ui.icon('o_lock', color='white').classes('flex-center')
                         password.on('update:model-value', lambda: setattr(password, 'error', None))
+                        password.on('keydown.enter', try_login)
 
                         # Login Button
                         ui.button(get_text('login'), on_click=try_login).props('color="primary" text-color="white" size="lg"').classes('w-full mt-8 py-3 text-lg font-bold')
@@ -1549,7 +1560,10 @@ def create_ui():
     
     @ui.page('/remote')
     async def remote_page(request: Request, db: Session = Depends(get_db)):
-        api_key_str = request.query_params.get('key')
+        # Try to get key from URL or Session Storage
+        url_key = request.query_params.get('key')
+        api_key_str = url_key or app.storage.user.get('remote_api_key')
+
         if not api_key_str:
             with ui.column().classes('w-full h-screen flex-center'):
                 ui.label("Invalid Access: Key is required").classes('text-h4 text-red')
@@ -1557,9 +1571,64 @@ def create_ui():
 
         api_key_obj = crud.get_api_key_by_key(db, api_key_str)
         if not api_key_obj or not api_key_obj.is_active:
+            # If stored key is invalid, clear it
+            if not url_key:
+                app.storage.user.pop('remote_api_key', None)
             with ui.column().classes('w-full h-screen flex-center'):
                 ui.label("Invalid or Inactive API Key").classes('text-h4 text-red')
             return
+
+        # If URL key is valid, store it for future sessions
+        if url_key:
+            app.storage.user['remote_api_key'] = url_key
+
+        ui.add_head_html('''
+            <style>
+            .model-card {
+                user-select: none;
+                transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.3s ease;
+                position: relative;
+                z-index: 1;
+            }
+            .model-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                z-index: 2;
+            }
+            .moving-up {
+                z-index: 10 !important;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.2) !important;
+            }
+            </style>
+            <script>
+            async function animateToTop(cardId, containerId) {
+                const card = document.getElementById(cardId);
+                const container = document.getElementById(containerId);
+                if (!card || !container) return;
+                
+                const cards = Array.from(container.querySelectorAll('.model-card'));
+                const firstCard = cards[0];
+                if (!firstCard || firstCard === card) return;
+                
+                const cardRect = card.getBoundingClientRect();
+                const firstRect = firstCard.getBoundingClientRect();
+                const diffY = firstRect.top - cardRect.top;
+                
+                card.classList.add('moving-up');
+                card.style.transform = `translateY(${diffY}px)`;
+                
+                // Shift other cards down that are above the clicked card
+                cards.forEach(c => {
+                    const cRect = c.getBoundingClientRect();
+                    if (c !== card && cRect.top < cardRect.top) {
+                        c.style.transform = `translateY(${cardRect.height + 8}px)`; // height + gap
+                    }
+                });
+
+                return new Promise(resolve => setTimeout(resolve, 450));
+            }
+            </script>
+        ''')
 
         ui.colors(primary='#2F6BFF')
 
@@ -1596,43 +1665,62 @@ def create_ui():
                             ui.label("No models in this group.").classes('text-italic text-grey-6')
                             continue
 
-                        for i, assoc in enumerate(associations):
-                            provider = db.query(models.ApiProvider).filter_by(id=assoc.provider_id).first()
-                            if not provider: continue
-                            
-                            with ui.row().classes('w-full items-center py-3 px-2 rounded hover:bg-gray-50 transition-colors'):
-                                with ui.column().classes('gap-0 flex-grow'):
-                                    ui.label(provider.model).classes('text-subtitle1 font-medium')
-                                    # ui.label(provider.name).classes('text-caption text-grey-6')
+                        # Container for items
+                        item_col = ui.column().classes('w-full gap-2')
+                        container_id = f"group-list-{group.id}"
+                        item_col.props(f'id="{container_id}"')
+                        
+                        with item_col:
+                            for i, assoc in enumerate(associations):
+                                provider = db.query(models.ApiProvider).filter_by(id=assoc.provider_id).first()
+                                if not provider: continue
                                 
-                                with ui.row().classes('gap-2 items-center'):
-                                    ui.badge(f"P{assoc.priority}").props('color="orange-1" text-color="orange-9"').classes('mr-2')
-                                    
-                                    up_btn = ui.button(icon='arrow_upward', on_click=lambda g_id=group.id, p_id=provider.id, idx=i, assocs=associations: move(g_id, idx, -1, assocs)) \
-                                        .props('flat round dense color="primary"')
-                                    with up_btn: ui.tooltip(get_text('move_up'))
-                                    
-                                    down_btn = ui.button(icon='arrow_downward', on_click=lambda g_id=group.id, p_id=provider.id, idx=i, assocs=associations: move(g_id, idx, 1, assocs)) \
-                                        .props('flat round dense color="primary"')
-                                    with down_btn: ui.tooltip(get_text('move_down'))
-                                    
-                                    if i == 0: up_btn.disable()
-                                    if i == len(associations) - 1: down_btn.disable()
+                                card_id = f"card-{group.id}-{provider.id}"
+                                # Make the card clickable to set as top
+                                card = ui.card().classes('w-full p-0 mb-1 shadow-sm border overflow-hidden model-card cursor-pointer')
+                                card.props(f'id="{card_id}"')
+                                
+                                async def handle_click(g_id=group.id, p_id=provider.id, assocs=associations, c_id=card_id, ct_id=container_id, idx=i):
+                                    if idx == 0: return # Already top
+                                    await ui.run_javascript(f'animateToTop("{c_id}", "{ct_id}")', timeout=1.0)
+                                    await move_to_top(g_id, p_id, assocs)
 
-        async def move(group_id, current_idx, direction, associations):
-            target_idx = current_idx + direction
-            if 0 <= target_idx < len(associations):
-                # Order by provider IDs
-                ordered_pids = [a.provider_id for a in associations]
-                # Swap
-                ordered_pids[current_idx], ordered_pids[target_idx] = ordered_pids[target_idx], ordered_pids[current_idx]
-                
-                # Update database with new priorities
-                for idx, pid in enumerate(ordered_pids):
-                    crud.add_provider_to_group(db, provider_id=pid, group_id=group_id, priority=idx+1)
-                
-                ui.notify(get_text('save_success'), color='positive')
-                await refresh_remote_view()
+                                card.on('click', handle_click)
+                                with card:
+                                    with ui.row().classes('w-full items-center no-wrap'):
+                                        # Sequence number
+                                        with ui.element('div').classes('p-4 bg-gray-50 border-r flex flex-center h-full w-14'):
+                                            ui.label(str(i + 1)).classes('text-h6 text-grey-6 font-bold seq-label')
+                                        
+                                        # Content
+                                        with ui.column().classes('gap-0 flex-grow p-3'):
+                                            # Model as primary
+                                            ui.label(provider.model).classes('text-subtitle1 font-medium')
+                                            # Alias (Name) as secondary gray
+                                            ui.label(provider.name).classes('text-caption text-grey-5')
+                                        
+                                        # Status Indicator (Only show for Top item)
+                                        with ui.row().classes('items-center p-3 w-16 justify-center'):
+                                            if i == 0:
+                                                ui.icon('check_circle', color='positive', size='md')
+                                            else:
+                                                ui.element('div').classes('w-6 h-6') # Empty space for alignment
+                                            
+                                            # Removed Px badge as requested
+
+                        async def move_to_top(group_id, provider_id, current_associations):
+                            # Current pids in order
+                            pids = [a.provider_id for a in current_associations]
+                            if provider_id in pids:
+                                pids.remove(provider_id)
+                                pids.insert(0, provider_id)
+                                
+                                for idx, pid in enumerate(pids):
+                                    crud.add_provider_to_group(db, provider_id=pid, group_id=group_id, priority=idx+1)
+                                
+                                ui.notify(get_text('save_success'), color='positive')
+                                await refresh_remote_view()
+
 
         await refresh_remote_view()
 
