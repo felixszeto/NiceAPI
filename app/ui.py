@@ -22,12 +22,90 @@ def create_ui():
     def main_page(db: Session = Depends(get_db)):
         ui.add_head_html('''
             <style>
-            .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-            .custom-scrollbar::-webkit-scrollbar-thumb { background: white; border-radius: 4px; }
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            
+            :root {
+                --primary: #2563eb;
+                --bg-main: #f8fafc;
+                --card-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+                --card-hover: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            }
+
+            body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+                background-color: var(--bg-main) !important;
+            }
+
+            .nicegui-content {
+                padding: 0 !important;
+            }
+
+            .glass-card {
+                background: rgba(255, 255, 255, 0.8) !important;
+                backdrop-filter: blur(8px);
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                border-radius: 12px !important;
+                box-shadow: var(--card-shadow) !important;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            }
+
+            .glass-card:hover {
+                box-shadow: var(--card-hover) !important;
+                transform: translateY(-2px);
+            }
+
+            .sidebar-active {
+                background: rgba(37, 99, 235, 0.1) !important;
+                color: var(--primary) !important;
+                border-right: 3px solid var(--primary);
+            }
+
+            .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+            .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
             .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-            .custom-scrollbar { scrollbar-width: thin; scrollbar-color: white transparent; }
+            
+            .q-table th {
+                font-weight: 600 !important;
+                color: #64748b !important;
+                text-transform: uppercase;
+                font-size: 0.75rem;
+                letter-spacing: 0.05em;
+            }
+
+            .q-table td {
+                color: #334155 !important;
+            }
+
+            .status-badge {
+                padding: 4px 8px;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 0.75rem;
+            }
+            
             .q-dialog__backdrop {
-                background: rgba(0, 0, 0, 0.8) !important;
+                background: rgba(15, 23, 42, 0.5) !important;
+                backdrop-filter: blur(4px);
+            }
+
+            .header-gradient {
+                background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%) !important;
+            }
+
+            .ellipsis {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            @media (max-width: 600px) {
+                .q-dialog__inner--minimized > div {
+                    max-width: 95vw !important;
+                    width: 95vw !important;
+                }
+                .mobile-hide {
+                    display: none !important;
+                }
             }
             </style>
         ''')
@@ -74,52 +152,96 @@ def create_ui():
                     rows = [r for r in rows if q in r['name'].lower() or q in r['model'].lower()]
                 return rows
 
-            def refresh_providers_table():
-                table.rows = get_all_providers_as_dict(
-                    search_query=provider_search_filter.value if 'provider_search_filter' in locals() else None
-                )
+            # 用於追蹤主頁面的搜尋關鍵字，解決 NiceGUI 狀態更新與元件值不同步導致的搜尋延後問題
+            provider_search_state = {'v': ''}
+
+            def refresh_providers_table(search_val=None):
+                if search_val is not None:
+                    # 來自事件觸發，立即更新狀態（處理 GenericEventArguments 的 args list）
+                    if isinstance(search_val, (list, tuple)) and len(search_val) > 0:
+                        search_val = search_val[0]
+                    provider_search_state['v'] = str(search_val)
+                v = provider_search_state['v']
+                table.rows = get_all_providers_as_dict(search_query=v)
                 table.update()
 
-            with ui.header(elevated=True).style('background-color: #111827').classes('p-2'):
-                with ui.column().classes('w-full gap-0'):
-                    ui.label(get_text('api_management')).classes('text-h5 self-start')
-                    
-                    def logout():
-                        app.storage.user['authenticated'] = False
-                        ui.navigate.reload()
+            def logout():
+                app.storage.user['authenticated'] = False
+                ui.navigate.reload()
 
-                    with ui.row().classes('w-full items-center no-wrap'):
-                        with ui.element('div').classes('flex-grow overflow-x-auto whitespace-nowrap py-1'):
-                            with ui.tabs() as tabs:
-                                dashboard_tab = ui.tab(get_text('dashboard'))
-                                providers_tab = ui.tab(get_text('providers'))
-                                groups_tab = ui.tab(get_text('groups'))
-                                logs_tab = ui.tab(get_text('call_logs'))
-                                errors_tab = ui.tab(get_text('failure_keywords'))
-                                api_keys_tab = ui.tab(get_text('api_keys'))
-                                settings_tab = ui.tab(get_text('settings'))
-                        ui.space()
-                        with ui.button(icon='language').props('flat text-color="white"'):
-                            with ui.menu():
-                                ui.menu_item('English', on_click=lambda: set_language('en'))
-                                ui.menu_item('中文(简体)', on_click=lambda: set_language('zh-CN'))
-                                ui.menu_item('中文(繁體)', on_click=lambda: set_language('zh-TW'))
-                                ui.menu_item('한국어', on_click=lambda: set_language('ko'))
-                                ui.menu_item('日本語', on_click=lambda: set_language('ja'))
-                        ui.button(get_text('logout'), on_click=logout).props('flat text-color="white"')
+            with ui.left_drawer(value=True, elevated=False).props('bordered breakpoint=1023 width=280 show-if-above').classes('bg-white p-0 flex flex-col no-wrap') as drawer:
+                # Top Logo Section
+                with ui.column().classes('p-6 items-center w-full border-b'):
+                    ui.image('/images/favicon.png').classes('w-12 h-12 mb-2')
+                    ui.label('NiceAPI Admin').classes('text-xl font-bold text-slate-800')
+                    ui.label('v1.2.0').classes('text-xs text-slate-400')
+                
+                # Scrollable Navigation Section
+                with ui.scroll_area().classes('flex-grow w-full custom-scrollbar'):
+                    with ui.tabs().props('vertical inline-label indicator-color="primary" active-color="primary" content-class="text-slate-600"').classes('w-full') as tabs:
+                        dashboard_tab = ui.tab(get_text('dashboard'), icon='dashboard').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        providers_tab = ui.tab(get_text('providers'), icon='router').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        groups_tab = ui.tab(get_text('groups'), icon='workspaces').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        logs_tab = ui.tab(get_text('call_logs'), icon='history').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        errors_tab = ui.tab(get_text('failure_keywords'), icon='report_problem').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        api_keys_tab = ui.tab(get_text('api_keys'), icon='vpn_key').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                        settings_tab = ui.tab(get_text('settings'), icon='settings').classes('justify-start px-6 py-2 min-h-[48px] w-full')
+                
+                # Bottom Action Section
+                with ui.column().classes('p-4 w-full border-t gap-1'):
+                    with ui.button(icon='language').props('flat color="primary"').classes('w-full justify-start'):
+                        ui.label('Language').classes('ml-2 text-sm')
+                        with ui.menu():
+                            ui.menu_item('English', on_click=lambda: set_language('en'))
+                            ui.menu_item('中文(简体)', on_click=lambda: set_language('zh-CN'))
+                            ui.menu_item('中文(繁體)', on_click=lambda: set_language('zh-TW'))
+                            ui.menu_item('한국어', on_click=lambda: set_language('ko'))
+                            ui.menu_item('日本語', on_click=lambda: set_language('ja'))
+                    ui.button(get_text('logout'), on_click=logout, icon='logout').props('flat color="negative"').classes('w-full justify-start text-sm')
 
+            with ui.header(elevated=False).classes('bg-white border-b text-slate-800 p-2 md:p-4 flex items-center justify-between'):
+                with ui.row().classes('items-center'):
+                    ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color="primary" round').classes('lg:hidden')
+                    ui.label(get_text('api_management')).classes('text-lg md:text-xl font-semibold ml-2')
+                
+                with ui.row().classes('items-center gap-4'):
+                    ui.icon('notifications', color='slate-400').classes('text-2xl cursor-pointer')
+                    ui.avatar(icon='person', color='primary').classes('cursor-pointer')
 
-            with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full'):
+            with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full bg-transparent p-4 md:p-6'):
                 with ui.tab_panel(dashboard_tab):
                     def build_dashboard(container):
                         with container:
-                            with ui.element('div').classes('flex flex-wrap w-full gap-4'):
+                            with ui.element('div').classes('flex flex-wrap w-full gap-6'):
+                                # Quick Stats
+                                with ui.row().classes('w-full gap-6 mb-2'):
+                                    def stat_card(label, value, icon, color):
+                                        with ui.card().classes('flex-grow glass-card p-0 overflow-hidden'):
+                                            with ui.row().classes('no-wrap items-stretch'):
+                                                with ui.column().classes(f'bg-{color}-500 p-4 justify-center items-center self-stretch'):
+                                                    ui.icon(icon, color='white').classes('text-2xl')
+                                                with ui.column().classes('p-4 justify-center'):
+                                                    ui.label(label).classes('text-xs text-slate-500 font-medium')
+                                                    ui.label(value).classes('text-2xl font-bold text-slate-800')
+                                    
+                                    db.expire_all()
+                                    # 只統計有分配到 provider 的請求（即 server 真正嘗試請求 API 的記錄）
+                                    logs_recent = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
+                                    total_calls = len(logs_recent)
+                                    success_rate = sum(1 for l in logs_recent if l.is_success) / total_calls * 100 if total_calls > 0 else 0
+                                    total_tokens = sum(l.total_tokens or 0 for l in logs_recent)
+                                    
+                                    stat_card(get_text('api_calls'), str(total_calls), 'bolt', 'blue')
+                                    stat_card(get_text('api_call_success_rate'), f'{success_rate:.1f}%', 'check_circle', 'green')
+                                    stat_card(get_text('total_tokens'), f'{total_tokens:,}', 'toll', 'orange')
+                                    stat_card(get_text('api_keys'), str(len(crud.get_api_keys(db))), 'vpn_key', 'purple')
+
                                 # Chart 1: Model Usage Distribution
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
-                                    ui.label(get_text('model_usage_distribution')).classes('text-h6')
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] glass-card p-6'):
+                                    ui.label(get_text('model_usage_distribution')).classes('text-lg font-bold text-slate-700 mb-4')
                                     with ui.element('div').classes('w-full h-64'):
                                         db.expire_all()
-                                        logs = crud.get_call_logs(db, limit=1000)
+                                        logs = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
                                         model_counts = {}
                                         for log in logs:
                                             if log.provider and log.provider.model:
@@ -150,14 +272,14 @@ def create_ui():
                                             ui.label(get_text('no_api_call_data')).classes('flex-center')
 
                                 # Chart 2: Daily API Calls
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
-                                    ui.label(get_text('daily_api_calls')).classes('text-h6')
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] glass-card p-6'):
+                                    ui.label(get_text('daily_api_calls')).classes('text-lg font-bold text-slate-700 mb-4')
                                     with ui.element('div').classes('w-full h-64'):
                                         from datetime import datetime, timedelta
                                         import pytz
 
                                         TAIPEI_TZ = pytz.timezone('Asia/Taipei')
-                                        logs = crud.get_call_logs(db, limit=5000) # Fetch more for historical data
+                                        logs = [l for l in crud.get_call_logs(db, limit=5000) if l.provider_id is not None] # Fetch more for historical data
                                         daily_counts = {}
                                         for i in range(7):
                                             date = (datetime.now(TAIPEI_TZ) - timedelta(days=i)).strftime('%Y-%m-%d')
@@ -181,10 +303,10 @@ def create_ui():
                                             ui.label(get_text('no_recent_api_call_data')).classes('flex-center')
 
                                 # Chart 3: API Call Success Rate
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('api_call_success_rate')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
-                                        logs = crud.get_call_logs(db, limit=1000)
+                                        logs = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
                                         success_count = sum(1 for log in logs if log.is_success)
                                         failure_count = len(logs) - success_count
                                         
@@ -211,7 +333,7 @@ def create_ui():
                                             ui.label(get_text('no_api_call_data')).classes('flex-center')
 
                                 # Chart 4: Average Response Time by Model
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('avg_response_time_ms')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
                                         logs = crud.get_call_logs(db, limit=100) # Analyze recent calls
@@ -238,7 +360,7 @@ def create_ui():
                                             ui.label(get_text('no_successful_calls_with_response_time')).classes('flex-center')
                                 
                                 # Chart 5: API Endpoint Success Rate
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('api_endpoint_success_rate')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
                                         logs = crud.get_call_logs(db, limit=1000)
@@ -273,7 +395,7 @@ def create_ui():
                                             ui.label(get_text('no_data_for_endpoint_success_rate')).classes('flex-center')
 
                                 # Chart 6: Average Response Time by Endpoint
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('avg_response_time_by_endpoint_ms')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
                                         logs = crud.get_call_logs(db, limit=1000)
@@ -306,7 +428,7 @@ def create_ui():
                                             ui.label(get_text('no_successful_calls_with_response_time')).classes('flex-center')
                                
                                 # Chart 7: Total API Calls by Endpoint
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('total_api_calls_by_endpoint')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
                                         logs = crud.get_call_logs(db, limit=1000)
@@ -335,7 +457,7 @@ def create_ui():
                                             ui.label(get_text('no_api_call_data')).classes('flex-center')
                                 
                                 # Chart 8: Total Cost by Model
-                                with ui.element('div').classes('w-full sm:w-[calc(50%-0.5rem)] border rounded-lg p-4 shadow-md bg-white'):
+                                with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                                     ui.label(get_text('total_cost_by_model')).classes('text-h6')
                                     with ui.element('div').classes('w-full h-64'):
                                         logs = crud.get_call_logs(db, limit=1000)
@@ -381,7 +503,7 @@ def create_ui():
                         ui.label(get_text('providers')).classes('text-h6')
                         ui.space()
                         with ui.row().classes('items-center gap-2'):
-                            provider_search_filter = ui.input(placeholder=get_text('search_models')).props('outlined dense icon="search"').classes('w-64').on('update:model-value', refresh_providers_table)
+                            provider_search_filter = ui.input(placeholder=get_text('search_models')).props('outlined dense icon="search"').classes('w-64').on('update:model-value', lambda e: refresh_providers_table(e.args))
                         
                         async def open_sync_models_dialog():
                             providers = crud.get_providers(db)
@@ -403,7 +525,7 @@ def create_ui():
                                 ui.notify("No providers available to sync.", color='warning')
                                 return
 
-                            with ui.dialog() as sync_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                            with ui.dialog() as sync_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[300px]'):
                                 ui.label(get_text('select_providers_to_sync')).classes('text-h6')
                                 
                                 # Multi-select for targets
@@ -494,7 +616,8 @@ def create_ui():
                             sync_dialog.open()
 
                     # Add Provider Dialog (Combined Single & Batch)
-                    with ui.dialog() as add_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                    with ui.dialog() as add_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[500px]'):
+                        add_dialog.props('persistent')
                         with ui.tabs().classes('w-full') as add_tabs:
                             batch_tab = ui.tab(get_text('add_provider'))
                             single_tab = ui.tab(get_text('add_single_model'))
@@ -631,7 +754,7 @@ def create_ui():
 
 
                     def open_quick_remove_dialog():
-                        with ui.dialog() as dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                        with ui.dialog() as dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[250px]'):
                             ui.label(get_text('quick_remove_by_api_key')).classes('text-h6')
 
                             def get_keys_with_alias():
@@ -663,11 +786,11 @@ def create_ui():
                         dialog.open()
 
                     columns = [
-                        {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True},
-                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
-                        {'name': 'name', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left'},
+                        {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left', 'classes': 'max-w-[150px] md:max-w-none ellipsis'},
+                        {'name': 'name', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
                         {'name': 'price_per_million_tokens', 'label': get_text('price_dollar_per_1m'), 'field': 'price_per_million_tokens', 'sortable': True},
-                        {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True},
+                        {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
                     ]
                     
@@ -686,7 +809,7 @@ def create_ui():
                         </q-td>
                     ''')
 
-                    with ui.dialog() as edit_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                    with ui.dialog() as edit_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[500px]'):
                         ui.label(get_text('edit_provider')).classes('text-h6')
                         edit_id = ui.label()
                         with ui.column().classes('w-full'):
@@ -791,7 +914,7 @@ def create_ui():
                             return
 
                         async def open_manage_dialog(group):
-                            with ui.dialog() as manage_dialog, ui.card().style('width: 90vw; max-width: 1000px; max-height: 90vh;').classes('p-0 flex flex-col no-wrap'):
+                            with ui.dialog() as manage_dialog, ui.card().style('width: 90vw; max-width: 1000px; max-height: 90vh; min-height: 500px;').classes('p-0 flex flex-col no-wrap'):
                                 # --- FIXED HEADER ---
                                 with ui.row().classes('w-full items-center justify-between p-4 bg-gray-100 flex-shrink-0'):
                                     ui.label(f"{get_text('manage_providers')}: {group['name']}").classes('text-h6')
@@ -804,7 +927,7 @@ def create_ui():
                                     with ui.column().classes('w-full overflow-auto'):
                                         table_columns = [
                                             # Use 'model' as the primary field for the name column to enable model-based filtering
-                                            {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
+                                            {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left', 'classes': 'w-[200px] break-all whitespace-normal'},
                                             # Hidden alias column to enable filtering by alias
                                             {'name': 'alias', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left', 'classes': 'hidden', 'headerClasses': 'hidden'},
                                             {'name': 'priority', 'label': get_text('priority'), 'field': 'priority', 'sortable': True, 'align': 'center', 'style': 'width: 320px'},
@@ -825,21 +948,49 @@ def create_ui():
                                                 'priority': priority
                                             })
 
-                                        def do_sort():
-                                            # Sort: priority 1 -> 5 first, then others
-                                            rows.sort(key=lambda r: (r['priority'] if r['priority'] > 0 else 999, r['name']))
+                                        # 用於管理供應商彈窗的內部搜尋狀態，解決搜尋結果延後一個動作的問題
+                                        manage_search_state = {'v': ''}
+
+                                        def update_view(search_val=None):
+                                            if search_val is not None:
+                                                # 如果是事件傳入的值，立即更新快取狀態（處理 GenericEventArguments 的 args list）
+                                                if isinstance(search_val, (list, tuple)) and len(search_val) > 0:
+                                                    search_val = search_val[0]
+                                                manage_search_state['v'] = str(search_val)
+                                            
+                                            v = manage_search_state['v'].lower()
+                                            
+                                            # 1. 先過濾符合搜尋條件的行
+                                            filtered_rows = [
+                                                r for r in rows
+                                                if v in r['model'].lower() or v in r['name'].lower()
+                                            ]
+                                            
+                                            # 2. 獲取搜尋結果中的 ID 集合
+                                            filtered_ids = {r['id'] for r in filtered_rows}
+                                            
+                                            # 3. 找出「已被選擇」但「不在搜尋結果中」的行（用於強制置頂）
+                                            extra_selected = [r for r in rows if r['selected'] and r['id'] not in filtered_ids]
+                                            
+                                            # 4. 合併結果：置頂行 + 搜尋結果行
+                                            final_rows = extra_selected + filtered_rows
+                                            
+                                            # 5. 統一排序：已選擇優先，其次按優先級，最後按名稱
+                                            final_rows.sort(key=lambda r: (0 if r['selected'] else 1, r['priority'] if r['priority'] > 0 else 999, r['name']))
+                                            
+                                            m_table.rows = final_rows
                                             m_table.update()
 
                                         # Table inside scrollable column
                                         m_table = ui.table(columns=table_columns, rows=rows, row_key='id', pagination={'rowsPerPage': 50}).classes('w-full px-2 shadow-none border-none')
-                                        m_table.bind_filter_from(search_input, 'value')
+                                        search_input.on('update:model-value', lambda e: update_view(e.args))
 
                                         # Highlight row if selected and handle name click for general selection
                                         m_table.add_slot('body-cell-model', '''
                                             <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
                                                 <div class="column cursor-pointer" @click="$parent.$emit('toggle_select', props.row)">
-                                                    <div class="text-weight-bold">{{ props.row.model }}</div>
-                                                    <div class="text-caption text-grey-6">{{ props.row.name }}</div>
+                                                    <div class="text-weight-bold" style="white-space: normal; word-break: break-all;">{{ props.row.model }}</div>
+                                                    <div class="text-caption text-grey-6" style="white-space: normal; word-break: break-all;">{{ props.row.name }}</div>
                                                 </div>
                                             </q-td>
                                         ''')
@@ -881,7 +1032,7 @@ def create_ui():
                                             else:
                                                 target_row['priority'] = 0
                                                 target_row['selected'] = False # Remove highlight when turned off
-                                            do_sort()
+                                            update_view()
 
                                         def handle_toggle_select(e):
                                             row_data = e.args
@@ -890,11 +1041,11 @@ def create_ui():
                                                 target_row['selected'] = not target_row['selected']
                                                 if not target_row['selected']:
                                                     target_row['priority'] = 0
-                                                do_sort()
+                                                update_view()
 
                                         m_table.on('set_p', handle_priority_change)
                                         m_table.on('toggle_select', handle_toggle_select)
-                                        do_sort()
+                                        update_view()
 
                                 # --- FIXED FOOTER ---
                                 with ui.row().classes('w-full justify-end p-4 bg-gray-50 flex-shrink-0 border-t'):
@@ -975,7 +1126,7 @@ def create_ui():
                     
                     ui.label(get_text('groups_description')).classes('mb-4')
 
-                    with ui.dialog() as add_group_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                    with ui.dialog() as add_group_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[250px]'):
                         ui.label(get_text('create_new_group')).classes('text-h6')
                         group_name_input = ui.input(get_text('group_name')).props('filled').classes('w-full')
                         async def handle_add_group():
@@ -1014,7 +1165,7 @@ def create_ui():
                         for log in logs:
                             data = {key: getattr(log, key) for key in log.__table__.columns.keys()}
                             data['api_endpoint'] = log.provider.api_endpoint if log.provider else "N/A"
-                            data['model'] = log.provider.model if log.provider else "N/A"
+                            data['model'] = log.provider.model if log.provider else (log.request_body.split('"model": "')[1].split('"')[0] if log.request_body and '"model": "' in log.request_body else "N/A")
                             data['api_key_display'] = f"{log.api_key.key[:5]}...{log.api_key.key[-4:]}" if log.api_key else "N/A"
                             if data.get('request_timestamp'):
                                 data['request_timestamp'] = data['request_timestamp'].strftime('%Y-%m-%d %H:%M:%S')
@@ -1038,16 +1189,16 @@ def create_ui():
                     log_filter_tabs.on('update:model-value', lambda: logs_table.update_rows(get_logs_with_provider_info(log_filter_tabs.value)))
 
                     log_columns = [
-                        {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True},
-                        {'name': 'api_key_display', 'label': get_text('api_key'), 'field': 'api_key_display', 'sortable': True, 'align': 'left'},
-                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
-                        {'name': 'request_timestamp', 'label': get_text('timestamp'), 'field': 'request_timestamp', 'sortable': True},
+                        {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'api_key_display', 'label': get_text('api_key'), 'field': 'api_key_display', 'sortable': True, 'align': 'left', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left', 'classes': 'max-w-[120px] md:max-w-none ellipsis'},
+                        {'name': 'request_timestamp', 'label': get_text('timestamp'), 'field': 'request_timestamp', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
                         {'name': 'is_success', 'label': get_text('success'), 'field': 'is_success'},
-                        {'name': 'status_code', 'label': get_text('status'), 'field': 'status_code'},
-                        {'name': 'response_time_ms', 'label': get_text('response_time_ms'), 'field': 'response_time_ms', 'sortable': True},
-                        {'name': 'total_tokens', 'label': get_text('total_tokens'), 'field': 'total_tokens', 'sortable': True},
-                        {'name': 'cost', 'label': get_text('cost'), 'field': 'cost', 'sortable': True},
-                        {'name': 'error_message', 'label': get_text('error'), 'field': 'error_message', 'style': 'max-width: 150px;'},
+                        {'name': 'status_code', 'label': get_text('status'), 'field': 'status_code', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'response_time_ms', 'label': get_text('response_time_ms'), 'field': 'response_time_ms', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'total_tokens', 'label': get_text('total_tokens'), 'field': 'total_tokens', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'cost', 'label': get_text('cost'), 'field': 'cost', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'error_message', 'label': get_text('error'), 'field': 'error_message', 'style': 'max-width: 100px;', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
                     ]
 
@@ -1068,29 +1219,29 @@ def create_ui():
                         error_dialog.open()
 
                     # Dialog to display the request and response details
-                    with ui.dialog() as response_dialog, ui.card().style('min-width: 90vw; max-width: 95vw;'):
+                    with ui.dialog() as response_dialog, ui.card().classes('w-[95vw] md:w-[98vw] max-w-none h-[90vh] md:h-[95vh] overflow-auto'):
                         with ui.row().classes('w-full no-wrap justify-between items-center mb-2'):
                             ui.label(get_text('call_details')).classes('text-h6')
                             ui.button(icon='close', on_click=response_dialog.close).props('flat round dense')
 
-                        with ui.row().classes('w-full no-wrap gap-4'):
-                            # Left side: Code content (JSON)
-                            with ui.column().classes('w-1/2 gap-4'):
+                        with ui.element('div').classes('flex flex-col md:grid md:grid-cols-2 w-full gap-4'):
+                            # Request Section
+                            with ui.column().classes('w-full gap-4'):
                                 with ui.card().classes('w-full p-4'):
                                     ui.label(get_text('request_body')).classes('text-subtitle1 font-bold mb-2')
-                                    request_content_area = ui.code('').classes('w-full max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
+                                    request_content_area = ui.code('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
+                                with ui.card().classes('w-full p-4'):
+                                    ui.label(get_text('request_text')).classes('text-subtitle1 font-bold mb-2')
+                                    request_text_area = ui.label('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
+                            
+                            # Response Section
+                            with ui.column().classes('w-full gap-4'):
                                 with ui.card().classes('w-full p-4'):
                                     ui.label(get_text('response_body')).classes('text-subtitle1 font-bold mb-2')
-                                    response_content_area = ui.code('').classes('w-full max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
-                            
-                            # Right side: Cleaned Text content
-                            with ui.column().classes('w-1/2 gap-4'):
-                                with ui.card().classes('w-full p-4 h-full'):
-                                    ui.label(get_text('request_text')).classes('text-subtitle1 font-bold mb-2')
-                                    request_text_area = ui.label('').classes('w-full max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
-                                with ui.card().classes('w-full p-4 h-full'):
+                                    response_content_area = ui.code('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
+                                with ui.card().classes('w-full p-4'):
                                     ui.label(get_text('response_text')).classes('text-subtitle1 font-bold mb-2')
-                                    response_text_area = ui.label('').classes('w-full max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
+                                    response_text_area = ui.label('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
 
                     def show_response_body(e):
                         row_data = e.args
@@ -1179,7 +1330,7 @@ def create_ui():
                     
                     ui.label(get_text('failure_keywords_description')).classes('mb-4')
 
-                    with ui.dialog() as add_keyword_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                    with ui.dialog() as add_keyword_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[300px]'):
                         ui.label(get_text('add_failure_keyword')).classes('text-h6')
                         with ui.column().classes('w-full'):
                             keyword_input = ui.input(get_text('keyword_case_insensitive')).props('filled').classes('w-full')
@@ -1250,10 +1401,10 @@ def create_ui():
                     columns = [
                         {'name': 'key_display', 'label': get_text('key'), 'field': 'key_display', 'align': 'left'},
                         {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True},
-                        {'name': 'groups', 'label': get_text('groups'), 'field': 'groups', 'align': 'left'},
-                        {'name': 'call_count', 'label': get_text('api_calls'), 'field': 'call_count', 'sortable': True},
-                        {'name': 'created_at', 'label': get_text('created_at'), 'field': 'created_at', 'sortable': True},
-                        {'name': 'last_used_at', 'label': get_text('last_used'), 'field': 'last_used_at', 'sortable': True},
+                        {'name': 'groups', 'label': get_text('groups'), 'field': 'groups', 'align': 'left', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'call_count', 'label': get_text('api_calls'), 'field': 'call_count', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'created_at', 'label': get_text('created_at'), 'field': 'created_at', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
+                        {'name': 'last_used_at', 'label': get_text('last_used'), 'field': 'last_used_at', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
                     ]
                     def refresh_keys_table():
@@ -1286,7 +1437,7 @@ def create_ui():
                             ui.button(get_text('close'), on_click=show_key_dialog.close, color='primary')
 
                     # This dialog is for creating a new key
-                    with ui.dialog() as add_key_dialog, ui.card().style('width: 60vw; max-width: 800px;').classes('pb-12'):
+                    with ui.dialog() as add_key_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[300px] pb-12'):
                         ui.label(get_text('create_new_api_key')).classes('text-h6')
                         with ui.column().classes('w-full'):
                             async def refresh_group_options():
@@ -1349,7 +1500,7 @@ def create_ui():
                         </q-td>
                     ''')
 
-                    with ui.dialog() as edit_key_dialog, ui.card().style('width: 60vw; max-width: 800px;'):
+                    with ui.dialog() as edit_key_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[300px]'):
                         ui.label(get_text('edit_api_key')).classes('text-h6')
                         edit_key_id = ui.label()
                         with ui.column().classes('w-full'):

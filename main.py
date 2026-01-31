@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import logging
-from app import models, crud
+from app import models, crud, migrations
 from app.database import engine, SessionLocal
 from app.ui import create_ui
 from nicegui import ui
@@ -100,6 +100,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    migrations.run_migrations()
 
 create_ui()
 ui.run_with(

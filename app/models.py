@@ -72,7 +72,7 @@ class CallLog(Base):
     __tablename__ = "call_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    provider_id = Column(Integer, ForeignKey("api_providers.id"))
+    provider_id = Column(Integer, ForeignKey("api_providers.id"), nullable=True)
     api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=True)
     request_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(TAIPEI_TZ))
     response_timestamp = Column(DateTime(timezone=True), nullable=True)

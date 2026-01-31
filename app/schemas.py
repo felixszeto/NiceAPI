@@ -145,7 +145,7 @@ class APIKey(APIKeyBase):
 
 # Schemas for CallLog
 class CallLogBase(BaseModel):
-    provider_id: int
+    provider_id: Optional[int] = None
     api_key_id: Optional[int] = None
     request_timestamp: Optional[datetime] = None
     response_timestamp: Optional[datetime] = None

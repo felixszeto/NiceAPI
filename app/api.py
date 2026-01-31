@@ -56,7 +56,7 @@ async def get_api_key_from_bearer(
             body_str = "Could not read request body"
 
         crud.create_call_log(db, schemas.CallLogCreate(
-            provider_id=1, # Default to first provider or a dummy ID for auth errors
+            provider_id=None,
             api_key_id=None,
             response_timestamp=datetime.now(TAIPEI_TZ),
             is_success=False,
@@ -108,7 +108,7 @@ async def get_api_key_from_anthropic_header(
             body_str = "Could not read request body"
 
         crud.create_call_log(db, schemas.CallLogCreate(
-            provider_id=1,
+            provider_id=None,
             api_key_id=None,
             response_timestamp=datetime.now(TAIPEI_TZ),
             is_success=False,
@@ -198,7 +198,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
         
         # Log Permission Error
         crud.create_call_log(db, schemas.CallLogCreate(
-            provider_id=1,
+            provider_id=None,
             api_key_id=api_key.id,
             response_timestamp=datetime.now(TAIPEI_TZ),
             is_success=False,
@@ -244,7 +244,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     log_db = SessionLocal()
                     try:
                         crud.create_call_log(log_db, schemas.CallLogCreate(
-                            provider_id=1,
+                            provider_id=None,
                             api_key_id=api_key.id,
                             response_timestamp=datetime.now(TAIPEI_TZ),
                             is_success=False,
@@ -373,7 +373,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 error_info = "All suitable providers failed or are unavailable."
                 # Log 503 Error
                 crud.create_call_log(db, schemas.CallLogCreate(
-                    provider_id=1,
+                    provider_id=None,
                     api_key_id=api_key.id,
                     response_timestamp=datetime.now(TAIPEI_TZ),
                     is_success=False,

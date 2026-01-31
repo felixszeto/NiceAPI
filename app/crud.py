@@ -89,9 +89,10 @@ def get_error_keywords(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.ErrorMaintenance).order_by(models.ErrorMaintenance.id.desc()).offset(skip).limit(limit).all()
 
 def create_call_log(db: Session, log: schemas.CallLogCreate):
-    provider = get_provider(db, log.provider_id)
-    if provider:
-        provider.total_calls += 1
+    if log.provider_id:
+        provider = get_provider(db, log.provider_id)
+        if provider:
+            provider.total_calls += 1
         if log.is_success:
             provider.successful_calls += 1
 
