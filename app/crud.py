@@ -381,13 +381,17 @@ def get_concurrency_status(db: Session) -> List[schemas.ProviderConcurrencyStatu
     results = db.query(
         models.ProviderGroupAssociation.provider_id,
         models.ProviderGroupAssociation.group_id,
+        models.ApiProvider.name.label('provider'),
+        models.ApiProvider.api_endpoint,
         models.ProviderGroupAssociation.active_calls
-    ).all()
+    ).join(models.ApiProvider, models.ProviderGroupAssociation.provider_id == models.ApiProvider.id).all()
     
     return [
         schemas.ProviderConcurrencyStatus(
             provider_id=r.provider_id,
             group_id=r.group_id,
+            provider=r.provider,
+            api_endpoint=r.api_endpoint,
             active_calls=r.active_calls
         ) for r in results
     ]
