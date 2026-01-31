@@ -79,8 +79,11 @@ def delete_providers_by_key(db: Session, api_key: str):
     db.commit()
     return deleted_count
 
-def get_call_logs(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.CallLog).join(models.ApiProvider).order_by(models.CallLog.id.desc()).offset(skip).limit(limit).all()
+def get_call_logs(db: Session, skip: int = 0, limit: int = 100, filter_success: bool | None = None):
+    query = db.query(models.CallLog).outerjoin(models.ApiProvider).order_by(models.CallLog.id.desc())
+    if filter_success is not None:
+        query = query.filter(models.CallLog.is_success == filter_success)
+    return query.offset(skip).limit(limit).all()
 
 def get_error_keywords(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.ErrorMaintenance).order_by(models.ErrorMaintenance.id.desc()).offset(skip).limit(limit).all()
@@ -232,7 +235,31 @@ def get_api_key_by_key(db: Session, key: str):
     return db.query(models.APIKey).filter(models.APIKey.key == key).first()
 
 def get_api_keys(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.APIKey).offset(skip).limit(limit).all()
+    from sqlalchemy import func
+
+    # Subquery to count call logs for each API key
+    call_count_subquery = db.query(
+        models.CallLog.api_key_id,
+        func.count(models.CallLog.id).label('call_count')
+    ).group_by(models.CallLog.api_key_id).subquery()
+
+    # Main query to get API keys and join with the call count subquery
+    query = db.query(
+        models.APIKey,
+        call_count_subquery.c.call_count
+    ).outerjoin(
+        call_count_subquery, models.APIKey.id == call_count_subquery.c.api_key_id
+    ).order_by(models.APIKey.id.desc())
+
+    results = query.offset(skip).limit(limit).all()
+
+    # Process results to add call_count to each APIKey object
+    api_keys_with_counts = []
+    for api_key, call_count in results:
+        api_key.call_count = call_count if call_count is not None else 0
+        api_keys_with_counts.append(api_key)
+
+    return api_keys_with_counts
 
 def generate_api_key():
     alphabet = string.ascii_letters + string.digits

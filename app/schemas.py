@@ -138,6 +138,7 @@ class APIKey(APIKeyBase):
     created_at: datetime
     last_used_at: Optional[datetime] = None
     groups: List[Group] = []
+    call_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -145,12 +146,14 @@ class APIKey(APIKeyBase):
 # Schemas for CallLog
 class CallLogBase(BaseModel):
     provider_id: int
+    api_key_id: Optional[int] = None
     request_timestamp: Optional[datetime] = None
     response_timestamp: Optional[datetime] = None
     is_success: bool
     status_code: int
     response_time_ms: int
     error_message: Optional[str] = None
+    request_body: Optional[str] = None
     response_body: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None

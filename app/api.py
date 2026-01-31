@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -25,7 +25,8 @@ router = APIRouter()
 auth_scheme = HTTPBearer()
 
 # Dependency to get and validate API key
-def get_api_key_from_bearer(
+async def get_api_key_from_bearer(
+    request: Request,
     db: Session = Depends(get_db),
     authorization: HTTPAuthorizationCredentials = Depends(auth_scheme)
 ) -> models.APIKey:
@@ -33,29 +34,48 @@ def get_api_key_from_bearer(
     Validates the API key from the 'Authorization: Bearer <key>' header.
     """
     api_key_str = authorization.credentials
+    error_detail = None
+    
     if not api_key_str:
+        error_detail = "No API key provided."
+    else:
+        db_api_key = crud.get_api_key_by_key(db, key=api_key_str)
+        if not db_api_key or not db_api_key.is_active:
+            error_detail = f"Incorrect API key provided or key has been revoked: {api_key_str[:10]}..."
+        else:
+            # Success
+            crud.update_api_key_last_used(db, db_api_key.id)
+            return db_api_key
+
+    # Log Authentication Failure
+    if error_detail:
+        try:
+            body = await request.body()
+            body_str = body.decode('utf-8', errors='ignore')
+        except:
+            body_str = "Could not read request body"
+
+        crud.create_call_log(db, schemas.CallLogCreate(
+            provider_id=1, # Default to first provider or a dummy ID for auth errors
+            api_key_id=None,
+            response_timestamp=datetime.now(TAIPEI_TZ),
+            is_success=False,
+            status_code=401,
+            response_time_ms=0,
+            error_message=f"Auth Error: {error_detail}",
+            request_body=body_str,
+            response_body=error_detail
+        ))
+        
         raise HTTPException(
             status_code=401,
             detail={"error": {"message": "Incorrect API key provided or key has been revoked.", "type": "invalid_request_error"}},
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    db_api_key = crud.get_api_key_by_key(db, key=api_key_str)
-
-    if not db_api_key or not db_api_key.is_active:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"message": "Incorrect API key provided or key has been revoked.", "type": "invalid_request_error"}},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Update last used timestamp
-    crud.update_api_key_last_used(db, db_api_key.id)
-    
-    return db_api_key
 
 # Dependency to get API key from Anthropic's custom header
-def get_api_key_from_anthropic_header(
+async def get_api_key_from_anthropic_header(
+    request: Request,
     db: Session = Depends(get_db),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     authorization: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))
@@ -67,22 +87,42 @@ def get_api_key_from_anthropic_header(
     if not api_key_str and authorization:
         api_key_str = authorization.credentials
 
+    error_detail = None
     if not api_key_str:
+        error_detail = "No API key provided."
+    else:
+        db_api_key = crud.get_api_key_by_key(db, key=api_key_str)
+        if not db_api_key or not db_api_key.is_active:
+            error_detail = f"Invalid API key: {api_key_str[:10]}..."
+        else:
+            # Success
+            crud.update_api_key_last_used(db, db_api_key.id)
+            return db_api_key
+
+    # Log Authentication Failure
+    if error_detail:
+        try:
+            body = await request.body()
+            body_str = body.decode('utf-8', errors='ignore')
+        except:
+            body_str = "Could not read request body"
+
+        crud.create_call_log(db, schemas.CallLogCreate(
+            provider_id=1,
+            api_key_id=None,
+            response_timestamp=datetime.now(TAIPEI_TZ),
+            is_success=False,
+            status_code=401,
+            response_time_ms=0,
+            error_message=f"Auth Error: {error_detail}",
+            request_body=body_str,
+            response_body=error_detail
+        ))
+        
         raise HTTPException(
             status_code=401,
-            detail={"error": {"message": "No API key provided.", "type": "authentication_error"}},
+            detail={"error": {"message": error_detail, "type": "authentication_error"}},
         )
-
-    db_api_key = crud.get_api_key_by_key(db, key=api_key_str)
-
-    if not db_api_key or not db_api_key.is_active:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": {"message": "Invalid API key.", "type": "authentication_error"}},
-        )
-    
-    crud.update_api_key_last_used(db, db_api_key.id)
-    return db_api_key
 
 
 @router.post("/api/providers/", response_model=schemas.ApiProvider)
@@ -153,7 +193,22 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
     
     if not matched_group_name:
         group_names = ", ".join(list(authorized_group_names))
-        logger.warning(f"API Key {api_key.key[:5]}... not authorized for group '{request.model}'. Authorized groups: [{group_names}]")
+        error_msg = f"API key not authorized for the requested model (group): {request.model}. Authorized groups: [{group_names}]"
+        logger.warning(f"API Key {api_key.key[:5]}... {error_msg}")
+        
+        # Log Permission Error
+        crud.create_call_log(db, schemas.CallLogCreate(
+            provider_id=1,
+            api_key_id=api_key.id,
+            response_timestamp=datetime.now(TAIPEI_TZ),
+            is_success=False,
+            status_code=403,
+            response_time_ms=0,
+            error_message=f"Permission Error: {error_msg}",
+            request_body=json.dumps(request.dict()),
+            response_body=error_msg
+        ))
+
         raise HTTPException(
             status_code=403,
             detail={"error": {"message": f"API key not authorized for the requested model (group): {request.model}", "type": "permission_denied_error"}}
@@ -169,11 +224,40 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
             excluded_provider_ids = []
             in_think_block = False
             while True:
-                # The select_provider function now looks up providers by the group name in request.model
-                provider = smart_router.select_provider(db, request, excluded_provider_ids=excluded_provider_ids)
+                provider = None
+                failure_keywords = []
+                
+                # Use a temporary session to select a provider and get keywords, then close it.
+                db_session = SessionLocal()
+                try:
+                    provider = smart_router.select_provider(db_session, request, excluded_provider_ids=excluded_provider_ids)
+                    if provider:
+                        failure_keywords = [kw.keyword.lower() for kw in crud.get_all_active_error_keywords(db_session)]
+                finally:
+                    db_session.close()
+
                 if not provider:
                     logger.error("All providers failed for streaming request.")
-                    error_message = {"error": {"message": "All suitable providers failed or are unavailable."}}
+                    error_info = "All suitable providers failed or are unavailable."
+                    
+                    # Log 503 Error
+                    log_db = SessionLocal()
+                    try:
+                        crud.create_call_log(log_db, schemas.CallLogCreate(
+                            provider_id=1,
+                            api_key_id=api_key.id,
+                            response_timestamp=datetime.now(TAIPEI_TZ),
+                            is_success=False,
+                            status_code=503,
+                            response_time_ms=0,
+                            error_message=f"Service Error: {error_info}",
+                            request_body=json.dumps(request.dict()),
+                            response_body=error_info
+                        ))
+                    finally:
+                        log_db.close()
+
+                    error_message = {"error": {"message": error_info}}
                     yield f"data: {json.dumps(error_message)}\n\n"
                     return
 
@@ -183,12 +267,11 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 
                 try:
                     api_url = provider.api_endpoint
-                    api_key = provider.api_key
-                    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                    provider_api_key = provider.api_key
+                    headers = {"Authorization": f"Bearer {provider_api_key}", "Content-Type": "application/json"}
                     payload = request.dict(exclude_unset=True)
                     payload['model'] = provider.model
                     payload['stream'] = True
-                    failure_keywords = [kw.keyword.lower() for kw in crud.get_all_active_error_keywords(db)]
 
                     async with httpx.AsyncClient(timeout=300) as client:
                         async with client.stream("POST", api_url, headers=headers, json=payload) as response:
@@ -203,11 +286,16 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                 else:
                                     logger.warning(f"Provider {provider.name} (ID: {provider.id}) failed with status code {status_code}: {error_message}")
                                 
-                                crud.create_call_log(db, schemas.CallLogCreate(
-                                    provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
-                                    status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=error_message,
-                                    response_body=error_message
-                                ))
+                                # Use a temporary session to log the error
+                                log_db = SessionLocal()
+                                try:
+                                    crud.create_call_log(log_db, schemas.CallLogCreate(
+                                        provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
+                                        status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=error_message,
+                                        request_body=json.dumps(request.dict()), response_body=error_message
+                                    ))
+                                finally:
+                                    log_db.close()
                                 
                                 excluded_provider_ids.append(provider.id)
                                 logger.info(f"Adding provider ID {provider.id} to exclusion list. Retrying stream.")
@@ -225,14 +313,12 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                 if "<think>" in chunk_raw:
                                     in_think_block = True
                                     parts = chunk_raw.split("<think>")
-                                    # Yield part before <think>
                                     if parts[0]: yield parts[0].encode('utf-8')
                                     continue
                                 
                                 if "</think>" in chunk_raw:
                                     in_think_block = False
                                     parts = chunk_raw.split("</think>")
-                                    # Yield part after </think>
                                     if len(parts) > 1 and parts[1]: yield parts[1].encode('utf-8')
                                     continue
 
@@ -240,12 +326,17 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                     yield chunk
                             
                             end_time = time.time()
-                            crud.create_call_log(db, schemas.CallLogCreate(
-                                provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
-                                status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
-                                error_message="Usage data not available for streaming responses.",
-                                response_body=full_response_text
-                            ))
+                            # Use a temporary session to log success
+                            log_db = SessionLocal()
+                            try:
+                                crud.create_call_log(log_db, schemas.CallLogCreate(
+                                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
+                                    status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
+                                    error_message=None,
+                                    request_body=json.dumps(request.dict()), response_body=full_response_text
+                                ))
+                            finally:
+                                log_db.close()
                             logger.info(f"--- Streaming Response Finished (Provider ID: {provider.id}) ---")
                             logger.info(f"Full response text: {full_response_text[:500]}..." if len(full_response_text) > 500 else f"Full response text: {full_response_text}")
                             break
@@ -255,11 +346,16 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     status_code = 503
                     logger.warning(f"Provider {provider.name} (ID: {provider.id}) failed during stream: {e}")
                     
-                    crud.create_call_log(db, schemas.CallLogCreate(
-                        provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
-                        status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=str(e),
-                        response_body=full_response_text
-                    ))
+                    # Use a temporary session to log the exception
+                    log_db = SessionLocal()
+                    try:
+                        crud.create_call_log(log_db, schemas.CallLogCreate(
+                            provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
+                            status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=str(e),
+                            request_body=json.dumps(request.dict()), response_body=full_response_text
+                        ))
+                    finally:
+                        log_db.close()
                     
                     excluded_provider_ids.append(provider.id)
                     logger.info(f"Adding provider ID {provider.id} to exclusion list. Retrying stream.")
@@ -274,15 +370,28 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
             # The select_provider function now looks up providers by the group name in request.model
             provider = smart_router.select_provider(db, request, excluded_provider_ids=excluded_provider_ids)
             if not provider:
-                raise HTTPException(status_code=503, detail="All suitable providers failed or are unavailable.")
+                error_info = "All suitable providers failed or are unavailable."
+                # Log 503 Error
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=1,
+                    api_key_id=api_key.id,
+                    response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=False,
+                    status_code=503,
+                    response_time_ms=0,
+                    error_message=f"Service Error: {error_info}",
+                    request_body=json.dumps(request.dict()),
+                    response_body=error_info
+                ))
+                raise HTTPException(status_code=503, detail=error_info)
 
             logger.info(f"Non-streaming attempt with provider: {provider.name} (ID: {provider.id})")
             start_time = time.time()
             
             try:
                 api_url = provider.api_endpoint
-                api_key = provider.api_key
-                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                provider_api_key = provider.api_key
+                headers = {"Authorization": f"Bearer {provider_api_key}", "Content-Type": "application/json"}
                 payload = request.dict(exclude_unset=True)
                 payload['model'] = provider.model
                 payload['stream'] = False
@@ -306,11 +415,11 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 usage = response_json.get("usage", {})
                 cost = crud.calculate_cost(provider, usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"))
                 crud.create_call_log(db, schemas.CallLogCreate(
-                    provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
                     status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
                     prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
                     total_tokens=usage.get("total_tokens"), cost=cost,
-                    response_body=json.dumps(response_json)
+                    request_body=json.dumps(request.dict()), response_body=json.dumps(response_json)
                 ))
                 logger.info(f"--- Non-streaming Response Success (Provider ID: {provider.id}) ---")
                 logger.info(f"Response JSON: {json.dumps(response_json)}")
@@ -328,9 +437,9 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     logger.warning(f"Provider {provider.name} (ID: {provider.id}) failed: {e}")
                 
                 crud.create_call_log(db, schemas.CallLogCreate(
-                    provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
                     status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=str(e),
-                    response_body=response_body
+                    request_body=json.dumps(request.dict()), response_body=response_body
                 ))
 
                 error_str = str(e).lower()

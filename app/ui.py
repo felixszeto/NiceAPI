@@ -1001,13 +1001,21 @@ def create_ui():
 
 
                 with ui.tab_panel(logs_tab):
-                    def get_logs_with_provider_info():
-                        logs = crud.get_call_logs(db)
+                    def get_logs_with_provider_info(filter_mode='all'):
+                        db.expire_all()
+                        filter_success = None
+                        if filter_mode == 'successful':
+                            filter_success = True
+                        elif filter_mode == 'failed':
+                            filter_success = False
+                        
+                        logs = crud.get_call_logs(db, limit=500, filter_success=filter_success)
                         log_data = []
                         for log in logs:
                             data = {key: getattr(log, key) for key in log.__table__.columns.keys()}
-                            data['api_endpoint'] = log.provider.api_endpoint
-                            data['model'] = log.provider.model
+                            data['api_endpoint'] = log.provider.api_endpoint if log.provider else "N/A"
+                            data['model'] = log.provider.model if log.provider else "N/A"
+                            data['api_key_display'] = f"{log.api_key.key[:5]}...{log.api_key.key[-4:]}" if log.api_key else "N/A"
                             if data.get('request_timestamp'):
                                 data['request_timestamp'] = data['request_timestamp'].strftime('%Y-%m-%d %H:%M:%S')
                             log_data.append(data)
@@ -1015,68 +1023,112 @@ def create_ui():
 
                     async def refresh_logs_table():
                         async with loading_animation():
-                            logs_table.update_rows(get_logs_with_provider_info())
+                            logs_table.update_rows(get_logs_with_provider_info(log_filter_tabs.value))
                         ui.notify(get_text('logs_refreshed'), color='positive')
 
                     with ui.row().classes('w-full items-center'):
                         ui.label(get_text('call_logs')).classes('text-h6')
                         ui.space()
                         ui.button(get_text('refresh_logs'), on_click=refresh_logs_table, icon='refresh', color='primary').props('flat')
+                    
+                    with ui.tabs().classes('mb-4') as log_filter_tabs:
+                        ui.tab('all', label=get_text('all_requests'))
+                        ui.tab('successful', label=get_text('successful_requests'))
+                        ui.tab('failed', label=get_text('failed_requests'))
+                    log_filter_tabs.on('update:model-value', lambda: logs_table.update_rows(get_logs_with_provider_info(log_filter_tabs.value)))
+
                     log_columns = [
                         {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True},
-                        {'name': 'api_endpoint', 'label': get_text('api_endpoint'), 'field': 'api_endpoint', 'sortable': True},
-                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True},
+                        {'name': 'api_key_display', 'label': get_text('api_key'), 'field': 'api_key_display', 'sortable': True, 'align': 'left'},
+                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left'},
                         {'name': 'request_timestamp', 'label': get_text('timestamp'), 'field': 'request_timestamp', 'sortable': True},
                         {'name': 'is_success', 'label': get_text('success'), 'field': 'is_success'},
                         {'name': 'status_code', 'label': get_text('status'), 'field': 'status_code'},
                         {'name': 'response_time_ms', 'label': get_text('response_time_ms'), 'field': 'response_time_ms', 'sortable': True},
-                        {'name': 'prompt_tokens', 'label': get_text('prompt_tokens'), 'field': 'prompt_tokens', 'sortable': True},
-                        {'name': 'completion_tokens', 'label': get_text('completion_tokens'), 'field': 'completion_tokens', 'sortable': True},
                         {'name': 'total_tokens', 'label': get_text('total_tokens'), 'field': 'total_tokens', 'sortable': True},
                         {'name': 'cost', 'label': get_text('cost'), 'field': 'cost', 'sortable': True},
-                        {'name': 'error_message', 'label': get_text('error'), 'field': 'error_message'},
+                        {'name': 'error_message', 'label': get_text('error'), 'field': 'error_message', 'style': 'max-width: 150px;'},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
                     ]
 
 
                     import json
+                    import re
 
-                    # Dialog to display the response body
-                    with ui.dialog() as response_dialog, ui.card().style('min-width: 60vw; max-width: 80vw;'):
-                        def copy_response_body():
-                            # Escape backticks and backslashes for JS template literal
-                            content_to_copy = response_content_area.content.replace('\\', '\\\\').replace('`', '\\`')
-                            js_command = f"navigator.clipboard.writeText(`{content_to_copy}`)"
-                            ui.run_javascript(js_command)
-                            ui.notify(get_text('copied_to_clipboard'), color='positive')
-
-                        with ui.row().classes('w-full no-wrap justify-between items-center'):
-                            ui.label(get_text('response_body')).classes('text-h6')
-                            with ui.button(icon='content_copy', on_click=copy_response_body).props('flat round dense'):
-                                ui.tooltip(get_text('copy_tooltip'))
-
-                        response_content_area = ui.code('').classes('w-full max-h-[60vh] overflow-auto bg-gray-900 text-white p-4 rounded-lg font-mono custom-scrollbar')
+                    # Dialog for error details
+                    with ui.dialog() as error_dialog, ui.card().style('min-width: 400px;'):
+                        ui.label(get_text('error_details')).classes('text-h6')
+                        error_display = ui.label('').classes('w-full whitespace-pre-wrap border p-4 rounded')
                         with ui.row().classes('w-full justify-end'):
-                            ui.button(get_text('close'), on_click=response_dialog.close, color='primary')
+                            ui.button(get_text('close'), on_click=error_dialog.close)
+
+                    def show_error_dialog(e):
+                        row_data = e.args
+                        error_display.text = row_data.get('error_message') or "No error message."
+                        error_dialog.open()
+
+                    # Dialog to display the request and response details
+                    with ui.dialog() as response_dialog, ui.card().style('min-width: 90vw; max-width: 95vw;'):
+                        with ui.row().classes('w-full no-wrap justify-between items-center mb-2'):
+                            ui.label(get_text('call_details')).classes('text-h6')
+                            ui.button(icon='close', on_click=response_dialog.close).props('flat round dense')
+
+                        with ui.row().classes('w-full no-wrap gap-4'):
+                            # Left side: Code content (JSON)
+                            with ui.column().classes('w-1/2 gap-4'):
+                                with ui.card().classes('w-full p-4'):
+                                    ui.label(get_text('request_body')).classes('text-subtitle1 font-bold mb-2')
+                                    request_content_area = ui.code('').classes('w-full max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
+                                with ui.card().classes('w-full p-4'):
+                                    ui.label(get_text('response_body')).classes('text-subtitle1 font-bold mb-2')
+                                    response_content_area = ui.code('').classes('w-full max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
+                            
+                            # Right side: Cleaned Text content
+                            with ui.column().classes('w-1/2 gap-4'):
+                                with ui.card().classes('w-full p-4 h-full'):
+                                    ui.label(get_text('request_text')).classes('text-subtitle1 font-bold mb-2')
+                                    request_text_area = ui.label('').classes('w-full max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
+                                with ui.card().classes('w-full p-4 h-full'):
+                                    ui.label(get_text('response_text')).classes('text-subtitle1 font-bold mb-2')
+                                    response_text_area = ui.label('').classes('w-full max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
 
                     def show_response_body(e):
                         row_data = e.args
-                        body = row_data.get('response_body')
-                        if body:
-                            try:
-                                # Try to parse and pretty-print JSON
-                                parsed_json = json.loads(body)
-                                formatted_body = json.dumps(parsed_json, indent=2, ensure_ascii=False)
-                                response_content_area.content = formatted_body
-                                response_content_area.language = 'json'
-                            except (json.JSONDecodeError, TypeError):
-                                # If it's not valid JSON, display as plain text
-                                response_content_area.content = body
-                                response_content_area.language = 'text'
-                        else:
-                            response_content_area.content = "No response body saved."
-                            response_content_area.language = 'text'
                         
+                        def format_body(body_str):
+                            if not body_str: return "No content."
+                            try:
+                                parsed = json.loads(body_str)
+                                return json.dumps(parsed, indent=2, ensure_ascii=False)
+                            except: return body_str
+
+                        def extract_text(body_str, is_req=True):
+                            if not body_str: return ""
+                            try:
+                                data = json.loads(body_str)
+                                if is_req:
+                                    msgs = data.get('messages', [])
+                                    return "\n".join([f"[{m.get('role', 'user')}]: {m.get('content', '')}" for m in msgs])
+                                else:
+                                    choices = data.get('choices', [])
+                                    if choices:
+                                        msg = choices[0].get('message', {})
+                                        if msg: return msg.get('content', "")
+                                    return ""
+                            except:
+                                if not is_req:
+                                    # Handle streaming SSE content extraction
+                                    content_matches = re.findall(r'"content":\s*"([^"]*)"', body_str)
+                                    if content_matches:
+                                        return "".join(content_matches).replace('\\n', '\n').replace('\\"', '"')
+                                return body_str
+
+                        request_content_area.content = format_body(row_data.get('request_body'))
+                        response_content_area.content = format_body(row_data.get('response_body'))
+                        request_text_area.text = extract_text(row_data.get('request_body'), True)
+                        response_text_area.text = extract_text(row_data.get('response_body'), False)
+                        
+                        request_content_area.update()
                         response_content_area.update()
                         response_dialog.open()
 
@@ -1085,6 +1137,14 @@ def create_ui():
                         rows=get_logs_with_provider_info(),
                         row_key='id'
                     ).classes('w-full')
+
+                    logs_table.add_slot('body-cell-error_message', f'''
+                        <q-td :props="props">
+                            <q-btn v-if="props.row.error_message" @click="$parent.$emit('view_error', props.row)"
+                                   flat dense color="negative" label="{get_text('details')}" />
+                            <span v-else>-</span>
+                        </q-td>
+                    ''')
                     
                     logs_table.add_slot('body-cell-actions', f'''
                         <q-td :props="props">
@@ -1095,6 +1155,7 @@ def create_ui():
                     ''')
 
                     logs_table.on('view_log', show_response_body)
+                    logs_table.on('view_error', show_error_dialog)
 
                     logs_table.add_slot('body-cell-cost', '''
                         <q-td :props="props">
@@ -1181,7 +1242,8 @@ def create_ui():
                                 "created_at": key.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                                 "last_used_at": key.last_used_at.strftime("%Y-%m-%d %H:%M:%S") if key.last_used_at else get_text('never'),
                                 "groups": ", ".join([g.name for g in key.groups]),
-                                "group_ids": [g.id for g in key.groups]
+                                "group_ids": [g.id for g in key.groups],
+                                "call_count": key.call_count
                             } for key in keys
                         ]
 
@@ -1189,6 +1251,7 @@ def create_ui():
                         {'name': 'key_display', 'label': get_text('key'), 'field': 'key_display', 'align': 'left'},
                         {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True},
                         {'name': 'groups', 'label': get_text('groups'), 'field': 'groups', 'align': 'left'},
+                        {'name': 'call_count', 'label': get_text('api_calls'), 'field': 'call_count', 'sortable': True},
                         {'name': 'created_at', 'label': get_text('created_at'), 'field': 'created_at', 'sortable': True},
                         {'name': 'last_used_at', 'label': get_text('last_used'), 'field': 'last_used_at', 'sortable': True},
                         {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},

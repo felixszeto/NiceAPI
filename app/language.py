@@ -139,6 +139,7 @@ i18n = {
     "failure_count_threshold": {"en": "Failure Count Threshold", "zh-TW": "失敗次數閾值", "zh-CN": "失败次数阈值", "ko": "실패 횟수 임계값", "ja": "失敗回数のしきい値"},
     "failure_period_minutes": {"en": "Failure Period (minutes)", "zh-TW": "失敗期間 (分鐘)", "zh-CN": "失败期间 (分钟)", "ko": "실패 기간 (분)", "ja": "失敗期間 (分)"},
     "settings_saved": {"en": "Settings saved successfully.", "zh-TW": "設定已成功儲存。", "zh-CN": "设置已成功保存。", "ko": "설정이 성공적으로 저장되었습니다.", "ja": "設定が正常に保存されました。"},
+    "request_body": {"en": "Request Body", "zh-TW": "請求內文", "zh-CN": "请求正文", "ko": "요청 본문", "ja": "リクエスト本文"},
     "response_body": {"en": "Response Body", "zh-TW": "回應內文", "zh-CN": "响应正文", "ko": "응답 본문", "ja": "応答本文"},
     "view": {"en": "View", "zh-TW": "查看", "zh-CN": "查看", "ko": "보기", "ja": "表示"},
     "dashboard_refreshed": {"en": "Dashboard refreshed!", "zh-TW": "儀表板已刷新！", "zh-CN": "仪表板已刷新！", "ko": "대시보드가 새로 고쳐졌습니다!", "ja": "ダッシュボードが更新されました！"},
@@ -177,6 +178,14 @@ i18n = {
     "move_up": {"en": "Move Up", "zh-TW": "上移", "zh-CN": "上移", "ko": "위로 이동", "ja": "上に移動"},
     "move_down": {"en": "Move Down", "zh-TW": "下移", "zh-CN": "下移", "ko": "아래로 이동", "ja": "下に移動"},
     "move_to_top": {"en": "Move to Top", "zh-TW": "置頂", "zh-CN": "置顶", "ko": "맨 위로 이동", "ja": "トップへ移動"},
+    "all_requests": {"en": "All", "zh-TW": "所有請求", "zh-CN": "所有请求", "ko": "모든 요청", "ja": "すべてのリクエスト"},
+    "successful_requests": {"en": "Successful", "zh-TW": "成功請求", "zh-CN": "成功请求", "ko": "성공한 요청", "ja": "成功したリクエスト"},
+    "failed_requests": {"en": "Failed", "zh-TW": "失敗請求", "zh-CN": "失败请求", "ko": "실패한 요청", "ja": "失敗したリクエスト"},
+    "call_details": {"en": "Call Details", "zh-TW": "呼叫詳情", "zh-CN": "呼叫详情", "ko": "호출 상세", "ja": "呼び出し詳細"},
+    "request_text": {"en": "Request Text", "zh-TW": "請求文字", "zh-CN": "请求文字", "ko": "요청 텍스트", "ja": "リクエストテキスト"},
+    "response_text": {"en": "Response Text", "zh-TW": "回應文字", "zh-CN": "响应文字", "ko": "응답 텍스트", "ja": "レスポンステキスト"},
+    "error_details": {"en": "Error Details", "zh-TW": "錯誤詳情", "zh-CN": "错误详情", "ko": "오류 상세", "ja": "エラー詳細"},
+    "details": {"en": "Details", "zh-TW": "詳情", "zh-CN": "详情", "ko": "상세", "ja": "詳細"},
 }
 
 def get_text(key: str) -> str:

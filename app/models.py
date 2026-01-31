@@ -66,18 +66,21 @@ class APIKey(Base):
     groups = relationship("Group",
                           secondary=api_key_group_association,
                           back_populates="api_keys")
+    call_logs = relationship("CallLog", back_populates="api_key")
 
 class CallLog(Base):
     __tablename__ = "call_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     provider_id = Column(Integer, ForeignKey("api_providers.id"))
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=True)
     request_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(TAIPEI_TZ))
     response_timestamp = Column(DateTime(timezone=True), nullable=True)
     is_success = Column(Boolean, nullable=False)
     status_code = Column(Integer)
     response_time_ms = Column(Integer)
     error_message = Column(String, nullable=True)
+    request_body = Column(Text, nullable=True)
     response_body = Column(Text, nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
@@ -85,6 +88,7 @@ class CallLog(Base):
     cost = Column(Float, nullable=True)
 
     provider = relationship("ApiProvider", back_populates="call_logs")
+    api_key = relationship("APIKey", back_populates="call_logs")
 
 class ErrorMaintenance(Base):
     __tablename__ = "error_maintenance"
