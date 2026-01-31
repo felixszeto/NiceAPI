@@ -12,7 +12,7 @@ def render_groups(db: Session, container: ui.element, panel: ui.tab_panel):
         providers_dicts = [{key: getattr(p, key) for key in p.__table__.columns.keys()} for p in providers]
         group_data = []
         for group in groups:
-            associations = db.query(models.provider_group_association).filter_by(group_id=group.id).all()
+            associations = db.query(models.ProviderGroupAssociation).filter_by(group_id=group.id).all()
             group_providers = {assoc.provider_id: {"priority": assoc.priority} for assoc in associations}
             group_data.append({'id': group.id, 'name': group.name, 'providers': group_providers})
         return group_data, providers_dicts

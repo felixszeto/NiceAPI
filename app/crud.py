@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from typing import List
 from . import models, schemas
 from sqlalchemy.dialects.sqlite import insert
 
@@ -66,10 +67,9 @@ def delete_providers_by_key(db: Session, api_key: str):
     ).delete(synchronize_session=False)
 
     # Delete associations from groups
-    stmt = models.provider_group_association.delete().where(
-        models.provider_group_association.c.provider_id.in_(provider_ids)
-    )
-    db.execute(stmt)
+    db.query(models.ProviderGroupAssociation).filter(
+        models.ProviderGroupAssociation.provider_id.in_(provider_ids)
+    ).delete(synchronize_session=False)
 
     # Delete the providers themselves
     deleted_count = len(provider_ids)
@@ -80,7 +80,8 @@ def delete_providers_by_key(db: Session, api_key: str):
     return deleted_count
 
 def get_call_logs(db: Session, skip: int = 0, limit: int = 100, filter_success: bool | None = None):
-    query = db.query(models.CallLog).outerjoin(models.ApiProvider).order_by(models.CallLog.id.desc())
+    from sqlalchemy.orm import joinedload
+    query = db.query(models.CallLog).options(joinedload(models.CallLog.details)).outerjoin(models.ApiProvider).order_by(models.CallLog.id.desc())
     if filter_success is not None:
         query = query.filter(models.CallLog.is_success == filter_success)
     return query.offset(skip).limit(limit).all()
@@ -96,10 +97,25 @@ def create_call_log(db: Session, log: schemas.CallLogCreate):
         if log.is_success:
             provider.successful_calls += 1
 
-    db_log = models.CallLog(**log.dict())
+    # Extract body data to save in separate table
+    log_data = log.dict()
+    req_body = log_data.pop('request_body', None)
+    resp_body = log_data.pop('response_body', None)
+
+    db_log = models.CallLog(**log_data)
     db.add(db_log)
     db.commit()
     db.refresh(db_log)
+
+    # Save details to CallLogDetail
+    db_detail = models.CallLogDetail(
+        id=db_log.id,
+        request_body=req_body,
+        response_body=resp_body
+    )
+    db.add(db_detail)
+    db.commit()
+    
     return db_log
 
 def get_error_keyword(db: Session, keyword_id: int):
@@ -172,10 +188,9 @@ def delete_group(db: Session, group_id: int):
     db_group = get_group(db, group_id)
     if db_group:
         # Manually delete associations from the provider_group_association table
-        stmt_provider = models.provider_group_association.delete().where(
-            models.provider_group_association.c.group_id == group_id
-        )
-        db.execute(stmt_provider)
+        db.query(models.ProviderGroupAssociation).filter(
+            models.ProviderGroupAssociation.group_id == group_id
+        ).delete(synchronize_session=False)
 
         # Manually delete associations from the api_key_group_association table
         stmt_apikey = models.api_key_group_association.delete().where(
@@ -188,10 +203,11 @@ def delete_group(db: Session, group_id: int):
     return db_group
 
 def add_provider_to_group(db: Session, provider_id: int, group_id: int, priority: int = 1):
-    stmt = insert(models.provider_group_association).values(
+    stmt = insert(models.ProviderGroupAssociation).values(
         provider_id=provider_id,
         group_id=group_id,
-        priority=priority
+        priority=priority,
+        active_calls=0
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=['provider_id', 'group_id'],
@@ -202,13 +218,12 @@ def add_provider_to_group(db: Session, provider_id: int, group_id: int, priority
     return get_provider(db, provider_id)
 
 def remove_provider_from_group(db: Session, provider_id: int, group_id: int):
-    stmt = models.provider_group_association.delete().where(
-        models.provider_group_association.c.provider_id == provider_id,
-        models.provider_group_association.c.group_id == group_id
-    )
-    result = db.execute(stmt)
+    result = db.query(models.ProviderGroupAssociation).filter(
+        models.ProviderGroupAssociation.provider_id == provider_id,
+        models.ProviderGroupAssociation.group_id == group_id
+    ).delete(synchronize_session=False)
     db.commit()
-    return result.rowcount > 0
+    return result > 0
 
 def calculate_cost(provider: models.ApiProvider, prompt_tokens: int, completion_tokens: int, total_tokens: int) -> float | None:
     """Calculates the cost of an API call based on token usage."""
@@ -337,3 +352,42 @@ def update_setting(db: Session, key: str, value: str):
     db.execute(stmt)
     db.commit()
     return get_setting(db, key)
+
+# Concurrency Management
+def reset_all_active_calls(db: Session):
+    """Sets all active_calls to 0. Called on server startup."""
+    db.query(models.ProviderGroupAssociation).update({models.ProviderGroupAssociation.active_calls: 0})
+    db.commit()
+
+def increment_active_calls(db: Session, provider_id: int, group_id: int):
+    """Increments active_calls for a specific provider-group association."""
+    db.query(models.ProviderGroupAssociation).filter(
+        models.ProviderGroupAssociation.provider_id == provider_id,
+        models.ProviderGroupAssociation.group_id == group_id
+    ).update({models.ProviderGroupAssociation.active_calls: models.ProviderGroupAssociation.active_calls + 1})
+    db.commit()
+
+def decrement_active_calls(db: Session, provider_id: int, group_id: int):
+    """Decrements active_calls for a specific provider-group association."""
+    db.query(models.ProviderGroupAssociation).filter(
+        models.ProviderGroupAssociation.provider_id == provider_id,
+        models.ProviderGroupAssociation.group_id == group_id,
+        models.ProviderGroupAssociation.active_calls > 0
+    ).update({models.ProviderGroupAssociation.active_calls: models.ProviderGroupAssociation.active_calls - 1})
+    db.commit()
+
+def get_concurrency_status(db: Session) -> List[schemas.ProviderConcurrencyStatus]:
+    """Returns the current active_calls for all provider-group associations."""
+    results = db.query(
+        models.ProviderGroupAssociation.provider_id,
+        models.ProviderGroupAssociation.group_id,
+        models.ProviderGroupAssociation.active_calls
+    ).all()
+    
+    return [
+        schemas.ProviderConcurrencyStatus(
+            provider_id=r.provider_id,
+            group_id=r.group_id,
+            active_calls=r.active_calls
+        ) for r in results
+    ]

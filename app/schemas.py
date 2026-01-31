@@ -160,11 +160,22 @@ class CallLogBase(BaseModel):
     total_tokens: Optional[int] = None
     cost: Optional[float] = None
 
+class CallLogDetailBase(BaseModel):
+    request_body: Optional[str] = None
+    response_body: Optional[str] = None
+
+class CallLogDetail(CallLogDetailBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
 class CallLogCreate(CallLogBase):
     pass
 
 class CallLog(CallLogBase):
     id: int
+    details: Optional[CallLogDetail] = None
     request_timestamp: Optional[datetime] = None
     response_timestamp: Optional[datetime] = None
 
@@ -181,6 +192,31 @@ class ModelResponse(BaseModel):
 class ModelListResponse(BaseModel):
     object: str = "list"
     data: List[ModelResponse]
+
+# Schemas for Concurrency Status
+class ProviderConcurrencyStatus(BaseModel):
+    provider_id: int
+    group_id: int
+    active_calls: int
+
+class ApiProviderSimple(BaseModel):
+    id: int
+    model: str
+
+    class Config:
+        from_attributes = True
+
+class GroupSimple(BaseModel):
+    id: int
+    name: str
+
+    class Config:
+        from_attributes = True
+
+class SystemStatusResponse(BaseModel):
+    Groups: List[GroupSimple]
+    Models: List[ApiProviderSimple]
+    Association: List[ProviderConcurrencyStatus]
 
 # Schemas for Settings
 class SettingBase(BaseModel):

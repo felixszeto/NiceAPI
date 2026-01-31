@@ -14,6 +14,10 @@ def render_logs(db: Session, container: ui.element, panel: ui.tab_panel):
         log_data = []
         for log in logs:
             data = {key: getattr(log, key) for key in log.__table__.columns.keys()}
+            # Prefer data from details table, fallback to legacy columns
+            data['request_body'] = log.details.request_body if log.details else log.request_body
+            data['response_body'] = log.details.response_body if log.details else log.response_body
+            
             data['api_endpoint'] = log.provider.api_endpoint if log.provider else "N/A"
             data['model'] = log.provider.model if log.provider else (log.request_body.split('"model": "')[1].split('"')[0] if log.request_body and '"model": "' in log.request_body else "N/A")
             data['api_key_display'] = f"{log.api_key.key[:5]}...{log.api_key.key[-4:]}" if log.api_key else "N/A"
@@ -47,25 +51,27 @@ def render_logs(db: Session, container: ui.element, panel: ui.tab_panel):
                 ui.button(get_text('close'), on_click=error_dialog.close)
 
         # Dialog for call details
-        with ui.dialog() as response_dialog, ui.card().classes('w-[95vw] md:w-[98vw] max-w-none h-[90vh] md:h-[95vh] overflow-auto'):
-            with ui.row().classes('w-full no-wrap justify-between items-center mb-2'):
+        with ui.dialog() as response_dialog, ui.card().classes('w-[95vw] max-w-none h-[95vh] overflow-auto'):
+            with ui.row().classes('w-full no-wrap justify-between items-center mb-2 sticky top-0 bg-white z-10'):
                 ui.label(get_text('call_details')).classes('text-h6')
                 ui.button(icon='close', on_click=response_dialog.close).props('flat round dense')
-            with ui.element('div').classes('flex flex-col md:grid md:grid-cols-2 w-full gap-4'):
-                with ui.column().classes('w-full gap-4'):
-                    with ui.card().classes('w-full p-4'):
-                        ui.label(get_text('request_body')).classes('text-subtitle1 font-bold mb-2')
-                        req_body_area = ui.code('', language='json').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
-                    with ui.card().classes('w-full p-4'):
-                        ui.label(get_text('request_text')).classes('text-subtitle1 font-bold mb-2')
-                        req_text_area = ui.label('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
-                with ui.column().classes('w-full gap-4'):
-                    with ui.card().classes('w-full p-4'):
-                        ui.label(get_text('response_body')).classes('text-subtitle1 font-bold mb-2')
-                        resp_body_area = ui.code('', language='json').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto bg-gray-900 text-white p-2 rounded font-mono text-xs')
-                    with ui.card().classes('w-full p-4'):
-                        ui.label(get_text('response_text')).classes('text-subtitle1 font-bold mb-2')
-                        resp_text_area = ui.label('').classes('w-full max-h-[30vh] md:max-h-[35vh] overflow-auto border p-2 rounded whitespace-pre-wrap text-sm bg-gray-50')
+            
+            with ui.column().classes('w-full gap-6'):
+                # Request Section
+                with ui.expansion(get_text('request_body'), icon='payload').classes('w-full bg-blue-50/30 rounded border'):
+                    req_body_area = ui.label('').classes('w-full whitespace-pre-wrap break-all font-mono text-sm bg-white p-4 border-t')
+                
+                with ui.card().classes('w-full p-4'):
+                    ui.label(get_text('request_text')).classes('text-h6 font-bold mb-2 text-blue-800')
+                    req_text_area = ui.label('').classes('w-full whitespace-pre-wrap break-all text-base bg-white p-4 border rounded')
+
+                # Response Section
+                with ui.expansion(get_text('response_body'), icon='output').classes('w-full bg-green-50/30 rounded border'):
+                    resp_body_area = ui.label('').classes('w-full whitespace-pre-wrap break-all font-mono text-sm bg-white p-4 border-t')
+                
+                with ui.card().classes('w-full p-4'):
+                    ui.label(get_text('response_text')).classes('text-h6 font-bold mb-2 text-green-800')
+                    resp_text_area = ui.label('').classes('w-full whitespace-pre-wrap break-all text-base bg-white p-4 border rounded')
 
         def format_body(body_str):
             if not body_str: return "No content."
@@ -89,11 +95,11 @@ def render_logs(db: Session, container: ui.element, panel: ui.tab_panel):
                 return body_str
 
         def show_details(row):
-            req_body_area.content = format_body(row.get('request_body'))
-            resp_body_area.content = format_body(row.get('response_body'))
+            req_body_area.text = format_body(row.get('request_body'))
+            resp_body_area.text = format_body(row.get('response_body'))
             req_text_area.text = extract_text(row.get('request_body'), True)
             resp_text_area.text = extract_text(row.get('response_body'), False)
-            req_body_area.update(); resp_body_area.update(); response_dialog.open()
+            response_dialog.open()
 
         logs_table = ui.table(columns=[
             {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True, 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},

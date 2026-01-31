@@ -101,6 +101,14 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def on_startup():
     init_db()
     migrations.run_migrations()
+    
+    # Reset active calls to 0 on startup
+    db = SessionLocal()
+    try:
+        crud.reset_all_active_calls(db)
+        print("Active calls reset to 0.")
+    finally:
+        db.close()
 
 create_ui()
 ui.run_with(

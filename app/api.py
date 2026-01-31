@@ -21,6 +21,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+@router.get("/api/status", response_model=schemas.SystemStatusResponse)
+def get_system_status(db: Session = Depends(get_db)):
+    """
+    Integrated public endpoint for Groups, Models, and Associations.
+    """
+    return {
+        "Groups": crud.get_groups(db),
+        "Models": crud.get_providers(db),
+        "Association": crud.get_concurrency_status(db)
+    }
+
+@router.get("/api/public/groups", response_model=List[schemas.GroupSimple])
+def get_public_groups(db: Session = Depends(get_db)):
+    """
+    Public endpoint to get all groups (ID and Name only).
+    """
+    return crud.get_groups(db)
+
+@router.get("/api/public/providers", response_model=List[schemas.ApiProviderSimple])
+def get_public_providers(db: Session = Depends(get_db)):
+    """
+    Public endpoint to get basic info of all providers.
+    """
+    return crud.get_providers(db)
+
 # Security scheme
 auth_scheme = HTTPBearer()
 
@@ -230,7 +255,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 # Use a temporary session to select a provider and get keywords, then close it.
                 db_session = SessionLocal()
                 try:
-                    provider = smart_router.select_provider(db_session, request, excluded_provider_ids=excluded_provider_ids)
+                    provider, group_id = smart_router.select_provider(db_session, request, excluded_provider_ids=excluded_provider_ids)
                     if provider:
                         failure_keywords = [kw.keyword.lower() for kw in crud.get_all_active_error_keywords(db_session)]
                 finally:
@@ -265,6 +290,14 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 start_time = time.time()
                 full_response_text = ""
                 
+                # Increment active calls
+                log_db_init = SessionLocal()
+                try:
+                    if group_id:
+                        crud.increment_active_calls(log_db_init, provider.id, group_id)
+                finally:
+                    log_db_init.close()
+
                 try:
                     api_url = provider.api_endpoint
                     provider_api_key = provider.api_key
@@ -360,6 +393,14 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     excluded_provider_ids.append(provider.id)
                     logger.info(f"Adding provider ID {provider.id} to exclusion list. Retrying stream.")
                     continue
+                finally:
+                    # Decrement active calls
+                    log_db_end = SessionLocal()
+                    try:
+                        if group_id:
+                            crud.decrement_active_calls(log_db_end, provider.id, group_id)
+                    finally:
+                        log_db_end.close()
 
         return StreamingResponse(stream_generator(), media_type="text/event-stream")
 
@@ -368,7 +409,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
         excluded_provider_ids = []
         while True:
             # The select_provider function now looks up providers by the group name in request.model
-            provider = smart_router.select_provider(db, request, excluded_provider_ids=excluded_provider_ids)
+            provider, group_id = smart_router.select_provider(db, request, excluded_provider_ids=excluded_provider_ids)
             if not provider:
                 error_info = "All suitable providers failed or are unavailable."
                 # Log 503 Error
@@ -388,6 +429,10 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
             logger.info(f"Non-streaming attempt with provider: {provider.name} (ID: {provider.id})")
             start_time = time.time()
             
+            # Increment active calls
+            if group_id:
+                crud.increment_active_calls(db, provider.id, group_id)
+
             try:
                 api_url = provider.api_endpoint
                 provider_api_key = provider.api_key
@@ -452,6 +497,10 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 excluded_provider_ids.append(provider.id)
                 logger.info(f"Adding provider ID {provider.id} to exclusion list. Retrying.")
                 continue
+            finally:
+                # Decrement active calls
+                if group_id:
+                    crud.decrement_active_calls(db, provider.id, group_id)
 
 @router.post("/api/import-models/")
 async def import_models(request: schemas.ModelImportRequest):
@@ -689,11 +738,13 @@ async def completions(request: schemas.CompletionRequest, db: Session = Depends(
     while True:
         # Create a dummy ChatRequest for provider selection
         dummy_request = schemas.ChatRequest(model=request.model, messages=[], stream=request.stream)
-        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
         if not provider:
             raise HTTPException(status_code=503, detail="All suitable providers failed or are unavailable.")
 
         start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
         try:
             api_url = provider.api_endpoint.replace("/chat/completions", "/completions")
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
@@ -715,6 +766,9 @@ async def completions(request: schemas.CompletionRequest, db: Session = Depends(
         except Exception as e:
             excluded_provider_ids.append(provider.id)
             continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
 
 @router.post("/v1/embeddings")
 async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
@@ -724,11 +778,13 @@ async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(ge
     excluded_provider_ids = []
     while True:
         dummy_request = schemas.ChatRequest(model=request.model, messages=[])
-        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
         if not provider:
             raise HTTPException(status_code=503, detail="No provider found for embeddings.")
 
         start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
         try:
             api_url = provider.api_endpoint.replace("/chat/completions", "/embeddings")
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
@@ -743,6 +799,9 @@ async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(ge
         except Exception as e:
             excluded_provider_ids.append(provider.id)
             continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
 
 @router.post("/v1/images/generations")
 async def image_generation(request: schemas.ImageGenerationRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
@@ -754,7 +813,7 @@ async def image_generation(request: schemas.ImageGenerationRequest, db: Session 
         # Use 'dall-e-3' or similar if model not specified
         model_name = request.model or "dall-e-3"
         dummy_request = schemas.ChatRequest(model=model_name, messages=[])
-        provider = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
         if not provider:
             raise HTTPException(status_code=503, detail="No provider found for image generation.")
 
@@ -772,3 +831,6 @@ async def image_generation(request: schemas.ImageGenerationRequest, db: Session 
         except Exception as e:
             excluded_provider_ids.append(provider.id)
             continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)

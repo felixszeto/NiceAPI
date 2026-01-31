@@ -88,7 +88,7 @@ async def remote_page(request: Request, db: Session = Depends(get_db)):
                         ui.space()
                         ui.badge(f"ID: {group.id}").props('color="blue-1" text-color="blue-9"')
                     
-                    associations = db.query(models.provider_group_association).filter_by(group_id=group.id).all()
+                    associations = db.query(models.ProviderGroupAssociation).filter_by(group_id=group.id).all()
                     associations.sort(key=lambda x: x.priority)
                     if not associations:
                         ui.label("No models in this group.").classes('text-italic text-grey-6')

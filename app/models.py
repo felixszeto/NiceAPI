@@ -8,11 +8,12 @@ from datetime import datetime
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # Association Table for the many-to-many relationship between ApiProvider and Group
-provider_group_association = Table('provider_group_association', Base.metadata,
-    Column('provider_id', Integer, ForeignKey('api_providers.id'), primary_key=True),
-    Column('group_id', Integer, ForeignKey('groups.id'), primary_key=True),
-    Column('priority', Integer, default=1)
-)
+class ProviderGroupAssociation(Base):
+    __tablename__ = 'provider_group_association'
+    provider_id = Column(Integer, ForeignKey('api_providers.id'), primary_key=True)
+    group_id = Column(Integer, ForeignKey('groups.id'), primary_key=True)
+    priority = Column(Integer, default=1)
+    active_calls = Column(Integer, default=0) # Tracks current concurrent calls
 
 # Association Table for the many-to-many relationship between ApiKey and Group
 api_key_group_association = Table('api_key_group_association', Base.metadata,
@@ -36,7 +37,7 @@ class ApiProvider(Base):
 
     call_logs = relationship("CallLog", back_populates="provider")
     groups = relationship("Group",
-                          secondary=provider_group_association,
+                          secondary="provider_group_association",
                           back_populates="providers")
 
 class Group(Base):
@@ -46,7 +47,7 @@ class Group(Base):
     name = Column(String, unique=True, index=True, nullable=False)
     
     providers = relationship("ApiProvider",
-                             secondary=provider_group_association,
+                             secondary="provider_group_association",
                              back_populates="groups")
 
 
@@ -80,6 +81,7 @@ class CallLog(Base):
     status_code = Column(Integer)
     response_time_ms = Column(Integer)
     error_message = Column(String, nullable=True)
+    # Legacy body columns - kept for compatibility with existing data
     request_body = Column(Text, nullable=True)
     response_body = Column(Text, nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
@@ -89,6 +91,16 @@ class CallLog(Base):
 
     provider = relationship("ApiProvider", back_populates="call_logs")
     api_key = relationship("APIKey", back_populates="call_logs")
+    details = relationship("CallLogDetail", back_populates="call_log", uselist=False, cascade="all, delete-orphan")
+
+class CallLogDetail(Base):
+    __tablename__ = "call_log_details"
+
+    id = Column(Integer, ForeignKey("call_logs.id"), primary_key=True)
+    request_body = Column(Text, nullable=True)
+    response_body = Column(Text, nullable=True)
+
+    call_log = relationship("CallLog", back_populates="details")
 
 class ErrorMaintenance(Base):
     __tablename__ = "error_maintenance"

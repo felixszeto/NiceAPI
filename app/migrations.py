@@ -31,3 +31,19 @@ def run_migrations():
                     logger.error(f"遷移失敗 (request_body): {e}")
     else:
         logger.info("call_logs 表不存在，將由 create_all 建立。")
+
+    # Migration for provider_group_association to add active_calls
+    if 'provider_group_association' in inspector.get_table_names():
+        pga_columns = [c['name'] for c in inspector.get_columns('provider_group_association')]
+        if 'active_calls' not in pga_columns:
+            with engine.begin() as conn:
+                try:
+                    logger.info("正在遷移：為 provider_group_association 添加 active_calls 欄位...")
+                    conn.execute(text("ALTER TABLE provider_group_association ADD COLUMN active_calls INTEGER DEFAULT 0"))
+                    logger.info("遷移成功：已添加 active_calls 欄位。")
+                except Exception as e:
+                    logger.error(f"遷移失敗 (active_calls): {e}")
+
+    # Ensure CallLogDetail table exists (though create_all handles new tables, we log it)
+    if 'call_log_details' not in inspector.get_table_names():
+        logger.info("正在遷移：call_log_details 表不存在，將由 create_all 建立。")
