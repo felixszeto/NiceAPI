@@ -197,13 +197,13 @@ class ModelListResponse(BaseModel):
 class ProviderConcurrencyStatus(BaseModel):
     provider_id: int
     group_id: int
-    provider: str
-    api_endpoint: str
     active_calls: int
 
 class ApiProviderSimple(BaseModel):
     id: int
+    provider: str
     model: str
+    api_endpoint: str
 
     class Config:
         from_attributes = True
