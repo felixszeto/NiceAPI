@@ -19,12 +19,17 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
 
     def build_dashboard_content():
         with container:
+            with ui.row().classes('w-full items-center mb-4'):
+                ui.label(get_text('dashboard')).classes('text-h6')
+                ui.space()
+                ui.button(get_text('refresh_data'), on_click=refresh_dashboard, icon='refresh', color='primary').props('flat')
+            
             with ui.element('div').classes('flex flex-wrap w-full gap-6'):
                 # Quick Stats
                 with ui.row().classes('w-full gap-6 mb-2'):
                     db.expire_all()
                     # 只統計有分配到 provider 的請求
-                    logs_recent = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
+                    logs_recent = [l for l in crud.get_call_logs(db, limit=10000) if l.provider_id is not None]
                     total_calls = len(logs_recent)
                     success_rate = sum(1 for l in logs_recent if l.is_success) / total_calls * 100 if total_calls > 0 else 0
                     total_tokens = sum(l.total_tokens or 0 for l in logs_recent)
@@ -39,7 +44,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                     ui.label(get_text('model_usage_distribution')).classes('text-lg font-bold text-slate-700 mb-4')
                     with ui.element('div').classes('w-full h-64'):
                         db.expire_all()
-                        logs = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
+                        logs = [l for l in crud.get_call_logs(db, limit=10000) if l.provider_id is not None]
                         model_counts = {}
                         for log in logs:
                             if log.provider and log.provider.model:
@@ -74,7 +79,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                     ui.label(get_text('daily_api_calls')).classes('text-lg font-bold text-slate-700 mb-4')
                     with ui.element('div').classes('w-full h-64'):
                         TAIPEI_TZ = pytz.timezone('Asia/Taipei')
-                        logs = [l for l in crud.get_call_logs(db, limit=5000) if l.provider_id is not None]
+                        logs = [l for l in crud.get_call_logs(db, limit=10000) if l.provider_id is not None]
                         daily_counts = {}
                         for i in range(7):
                             date = (datetime.now(TAIPEI_TZ) - timedelta(days=i)).strftime('%Y-%m-%d')
@@ -101,7 +106,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('api_call_success_rate')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = [l for l in crud.get_call_logs(db, limit=1000) if l.provider_id is not None]
+                        logs = [l for l in crud.get_call_logs(db, limit=10000) if l.provider_id is not None]
                         success_count = sum(1 for log in logs if log.is_success)
                         failure_count = len(logs) - success_count
                         
@@ -270,10 +275,5 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
             build_dashboard_content()
         ui.notify(get_text('dashboard_refreshed'), color='positive')
 
-    with ui.row().classes('w-full items-center mb-4'):
-        ui.label(get_text('dashboard')).classes('text-h6')
-        ui.space()
-        ui.button(get_text('refresh_data'), on_click=refresh_dashboard, icon='refresh', color='primary').props('flat')
-    
     panel.on('show', refresh_dashboard)
     build_dashboard_content()

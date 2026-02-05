@@ -6,6 +6,7 @@ from .common import loading_animation
 
 def render_groups(db: Session, container: ui.element, panel: ui.tab_panel):
     def get_groups_with_providers():
+        db.commit() # 結束當前事務，確保讀取到最新數據
         db.expire_all()
         groups = crud.get_groups(db)
         providers = crud.get_providers(db)
@@ -69,34 +70,36 @@ def render_groups(db: Session, container: ui.element, panel: ui.tab_panel):
                     m_table.rows = final
                     m_table.update()
 
-                m_table = ui.table(columns=[
-                    {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left', 'classes': 'w-[200px] break-all whitespace-normal'},
-                    {'name': 'alias', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left', 'classes': 'hidden', 'headerClasses': 'hidden'},
-                    {'name': 'priority', 'label': get_text('priority'), 'field': 'priority', 'sortable': True, 'align': 'center', 'style': 'width: 320px'},
-                ], rows=rows, row_key='id', pagination={'rowsPerPage': 50}).classes('w-full px-2 shadow-none border-none')
-                search_input.on('update:model-value', lambda e: update_view(e.args))
-
-                m_table.add_slot('body-cell-model', '''
-                    <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
-                        <div class="column cursor-pointer" @click="$parent.$emit('toggle_select', props.row)">
-                            <div class="text-weight-bold" style="white-space: normal; word-break: break-all;">{{ props.row.model }}</div>
-                            <div class="text-caption text-grey-6" style="white-space: normal; word-break: break-all;">{{ props.row.name }}</div>
-                        </div>
-                    </q-td>
-                ''')
-                m_table.add_slot('body-cell-priority', '''
-                    <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
-                        <div class="row q-gutter-x-sm justify-center no-wrap">
-                            <div v-for="p in [1,2,3,4,5]" :key="p" class="column items-center">
-                                <div class="text-bold text-blue-9" style="font-size: 10px; margin-bottom: -4px">P{{p}}</div>
-                                <q-toggle :model-value="props.row.priority === p" @update:model-value="val => $parent.$emit('set_p', {row: props.row, val: val ? p : 0})" dense size="sm" color="primary" />
+                with ui.element('div').classes('w-full flex-grow overflow-auto custom-scrollbar'):
+                    m_table = ui.table(columns=[
+                        {'name': 'model', 'label': get_text('model'), 'field': 'model', 'sortable': True, 'align': 'left', 'classes': 'w-[200px] break-all whitespace-normal'},
+                        {'name': 'alias', 'label': get_text('alias'), 'field': 'name', 'sortable': True, 'align': 'left', 'classes': 'hidden', 'headerClasses': 'hidden'},
+                        {'name': 'priority', 'label': get_text('priority'), 'field': 'priority', 'sortable': True, 'align': 'center', 'style': 'width: 320px'},
+                    ], rows=rows, row_key='id', pagination={'rowsPerPage': 5}).classes('w-full px-2 shadow-none border-none')
+                    
+                    m_table.add_slot('body-cell-model', '''
+                        <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
+                            <div class="column cursor-pointer" @click="$parent.$emit('toggle_select', props.row)">
+                                <div class="text-weight-bold" style="white-space: normal; word-break: break-all;">{{ props.row.model }}</div>
+                                <div class="text-caption text-grey-6" style="white-space: normal; word-break: break-all;">{{ props.row.name }}</div>
                             </div>
-                        </div>
-                    </q-td>
-                ''')
+                        </q-td>
+                    ''')
+                    m_table.add_slot('body-cell-priority', '''
+                        <q-td :props="props" :class="props.row.selected ? 'bg-blue-1' : ''">
+                            <div class="row q-gutter-x-sm justify-center no-wrap">
+                                <div v-for="p in [1,2,3,4,5]" :key="p" class="column items-center">
+                                    <div class="text-bold text-blue-9" style="font-size: 10px; margin-bottom: -4px">P{{p}}</div>
+                                    <q-toggle :model-value="props.row.priority === p" @update:model-value="val => $parent.$emit('set_p', {row: props.row, val: val ? p : 0})" dense size="sm" color="primary" />
+                                </div>
+                            </div>
+                        </q-td>
+                    ''')
 
-                m_table.on('set_p', lambda e: handle_priority_change(e.args, rows, update_view))
-                m_table.on('toggle_select', lambda e: handle_toggle_select(e.args, rows, update_view))
+                    m_table.on('set_p', lambda e: handle_priority_change(e.args, rows, update_view))
+                    m_table.on('toggle_select', lambda e: handle_toggle_select(e.args, rows, update_view))
+                
+                search_input.on('update:model-value', lambda e: update_view(e.args))
                 update_view()
 
             with ui.row().classes('w-full justify-end p-4 bg-gray-50 flex-shrink-0 border-t'):
@@ -146,8 +149,6 @@ def render_groups(db: Session, container: ui.element, panel: ui.tab_panel):
     with container:
         with ui.row().classes('w-full items-center'):
             ui.label(get_text('provider_groups')).classes('text-h6')
-            ui.space()
-            ui.button(get_text('refresh_groups'), on_click=refresh_groups_view, icon='refresh', color='primary').props('flat')
         ui.label(get_text('groups_description')).classes('mb-4')
         with ui.dialog() as add_group_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[250px]'):
             ui.label(get_text('create_new_group')).classes('text-h6')

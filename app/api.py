@@ -28,7 +28,7 @@ def get_system_status(db: Session = Depends(get_db)):
     """
     return {
         "Groups": crud.get_groups(db),
-        "Models": crud.get_unique_providers(db),
+        "Models": crud.get_providers(db),
         "Association": crud.get_concurrency_status(db)
     }
 
@@ -42,9 +42,9 @@ def get_public_groups(db: Session = Depends(get_db)):
 @router.get("/api/public/providers", response_model=List[schemas.ApiProviderSimple])
 def get_public_providers(db: Session = Depends(get_db)):
     """
-    Public endpoint to get unique providers (Name and Endpoint).
+    Public endpoint to get basic info of all providers.
     """
-    return crud.get_unique_providers(db)
+    return crud.get_providers(db)
 
 # Security scheme
 auth_scheme = HTTPBearer()

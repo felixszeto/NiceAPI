@@ -8,9 +8,10 @@ from .common import loading_animation
 
 def render_logs(db: Session, container: ui.element, panel: ui.tab_panel):
     def get_logs_with_provider_info(filter_mode='all'):
+        db.commit()
         db.expire_all()
         filter_success = {'successful': True, 'failed': False}.get(filter_mode)
-        logs = crud.get_call_logs(db, limit=500, filter_success=filter_success)
+        logs = crud.get_call_logs(db, limit=50, filter_success=filter_success)
         log_data = []
         for log in logs:
             data = {key: getattr(log, key) for key in log.__table__.columns.keys()}
@@ -32,7 +33,7 @@ def render_logs(db: Session, container: ui.element, panel: ui.tab_panel):
         ui.notify(get_text('logs_refreshed'), color='positive')
 
     with container:
-        with ui.row().classes('w-full items-center'):
+        with ui.row().classes('w-full items-center mb-4'):
             ui.label(get_text('call_logs')).classes('text-h6')
             ui.space()
             ui.button(get_text('refresh_logs'), on_click=refresh_logs_table, icon='refresh', color='primary').props('flat')

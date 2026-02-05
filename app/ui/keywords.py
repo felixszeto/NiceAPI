@@ -6,6 +6,7 @@ from .common import loading_animation
 
 def render_keywords(db: Session, container: ui.element, panel: ui.tab_panel):
     def refresh_keywords_table():
+        db.expire_all()
         keywords_table.update_rows([{key: getattr(kw, key) for key in kw.__table__.columns.keys()} for kw in crud.get_error_keywords(db)])
 
     async def refresh_keywords_table_async():
@@ -16,10 +17,12 @@ def render_keywords(db: Session, container: ui.element, panel: ui.tab_panel):
     with container:
         with ui.row().classes('w-full items-center'):
             ui.label(get_text('failure_keywords')).classes('text-h6')
-            ui.space()
-            ui.button(get_text('refresh_keywords'), on_click=refresh_keywords_table_async, icon='refresh', color='primary').props('flat')
         
         ui.label(get_text('failure_keywords_description')).classes('mb-4')
+
+        async def open_add_dialog():
+            db.expire_all()
+            add_dialog.open()
 
         with ui.dialog() as add_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[300px]'):
             ui.label(get_text('add_failure_keyword')).classes('text-h6')
@@ -34,7 +37,7 @@ def render_keywords(db: Session, container: ui.element, panel: ui.tab_panel):
                 ui.button(get_text('add'), on_click=handle_add, color='primary')
                 ui.button(get_text('cancel'), on_click=add_dialog.close)
 
-        ui.button(get_text('add_keyword'), on_click=add_dialog.open, color='primary').classes('mb-4')
+        ui.button(get_text('add_keyword'), on_click=open_add_dialog, color='primary').classes('mb-4')
         
         keywords_table = ui.table(columns=[
             {'name': 'id', 'label': get_text('id'), 'field': 'id', 'sortable': True},
@@ -43,7 +46,8 @@ def render_keywords(db: Session, container: ui.element, panel: ui.tab_panel):
             {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active'},
             {'name': 'last_triggered', 'label': get_text('last_triggered'), 'field': 'last_triggered', 'sortable': True},
             {'name': 'actions', 'label': get_text('actions'), 'field': 'actions'},
-        ], rows=[{key: getattr(kw, key) for key in kw.__table__.columns.keys()} for kw in crud.get_error_keywords(db)], row_key='id').classes('w-full')
+        ], rows=[], row_key='id').classes('w-full')
+        refresh_keywords_table()
         
         keywords_table.add_slot('body-cell-actions', '''
             <q-td :props="props">

@@ -12,6 +12,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
     provider_search_state = {'v': ''}
 
     def get_all_providers_as_dict(search_query=None):
+        db.expire_all()
         providers = crud.get_providers(db)
         rows = [
             {key: getattr(p, key) for key in p.__table__.columns.keys()}
@@ -118,6 +119,10 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
                 sync_dialog.open()
 
         # Add Provider Dialog
+        async def open_add_dialog():
+            db.expire_all()
+            add_dialog.open()
+
         with ui.dialog() as add_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[500px]'):
             add_dialog.props('persistent')
             with ui.tabs().classes('w-full') as add_tabs:
@@ -242,9 +247,8 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
         ]
         
         with ui.row().classes('items-center gap-2 mb-4'):
-            ui.button(get_text('add_provider'), on_click=add_dialog.open, color='primary', icon='add').props('unelevated')
+            ui.button(get_text('add_provider'), on_click=open_add_dialog, color='primary', icon='add').props('unelevated')
             ui.button(get_text('sync_models'), on_click=open_sync_models_dialog, icon='sync', color='primary').props('outline')
-            ui.button(get_text('refresh_providers'), on_click=refresh_providers_table_async, icon='refresh', color='primary').props('flat')
             ui.button(get_text('quick_remove'), on_click=open_quick_remove_dialog, color='negative', icon='delete_sweep').props('flat')
         
         table = ui.table(columns=columns, rows=get_all_providers_as_dict(), row_key='id', pagination=20).classes('w-full mt-4')
@@ -256,6 +260,18 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
         ''')
 
         # Edit Dialog
+        async def open_edit_dialog(args):
+            db.expire_all()
+            setattr(edit_id_label, 'text', args['id'])
+            setattr(edit_name_input, 'value', args['name'])
+            setattr(edit_endpoint_input, 'value', args['api_endpoint'])
+            setattr(edit_key_input, 'value', '')
+            setattr(edit_model_input, 'value', args['model'])
+            setattr(edit_price_input, 'value', args['price_per_million_tokens'])
+            setattr(edit_type_select, 'value', args['type'])
+            setattr(edit_active_toggle, 'value', args['is_active'])
+            edit_dialog.open()
+
         with ui.dialog() as edit_dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[500px]'):
             ui.label(get_text('edit_provider')).classes('text-h6')
             edit_id_label = ui.label()
@@ -287,17 +303,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
                 ui.button(get_text('save'), on_click=handle_edit, color='primary')
                 ui.button(get_text('cancel'), on_click=edit_dialog.close)
 
-        table.on('edit', lambda e: (
-            setattr(edit_id_label, 'text', e.args['id']),
-            setattr(edit_name_input, 'value', e.args['name']),
-            setattr(edit_endpoint_input, 'value', e.args['api_endpoint']),
-            setattr(edit_key_input, 'value', ''),
-            setattr(edit_model_input, 'value', e.args['model']),
-            setattr(edit_price_input, 'value', e.args['price_per_million_tokens']),
-            setattr(edit_type_select, 'value', e.args['type']),
-            setattr(edit_active_toggle, 'value', e.args['is_active']),
-            edit_dialog.open()
-        ))
+        table.on('edit', lambda e: open_edit_dialog(e.args))
         
         table.on('delete', lambda e: open_delete_confirm(e.args))
         panel.on('show', refresh_providers_table_async)

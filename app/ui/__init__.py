@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 from .common import apply_styles, set_ui_colors, set_language, logout
 from .auth import login_page
+from .menu import render_menu
 from .dashboard import render_dashboard
 from .providers import render_providers
 from .groups import render_groups
@@ -33,6 +34,7 @@ def create_ui():
             
             with ui.scroll_area().classes('flex-grow w-full custom-scrollbar'):
                 with ui.tabs().props('vertical inline-label indicator-color="primary" active-color="primary" content-class="text-slate-600"').classes('w-full') as tabs:
+                    menu_tab = ui.tab(get_text('menu'), icon='home').classes('justify-start px-6 py-2 min-h-[48px] w-full')
                     dashboard_tab = ui.tab(get_text('dashboard'), icon='dashboard').classes('justify-start px-6 py-2 min-h-[48px] w-full')
                     providers_tab = ui.tab(get_text('providers'), icon='router').classes('justify-start px-6 py-2 min-h-[48px] w-full')
                     groups_tab = ui.tab(get_text('groups'), icon='workspaces').classes('justify-start px-6 py-2 min-h-[48px] w-full')
@@ -61,7 +63,9 @@ def create_ui():
                 ui.icon('notifications', color='slate-400').classes('text-2xl cursor-pointer')
                 ui.avatar(icon='person', color='primary').classes('cursor-pointer')
 
-        with ui.tab_panels(tabs, value=dashboard_tab).classes('w-full bg-transparent p-4 md:p-6'):
+        with ui.tab_panels(tabs, value=menu_tab).classes('w-full bg-transparent p-4 md:p-6'):
+            with ui.tab_panel(menu_tab):
+                render_menu()
             with ui.tab_panel(dashboard_tab) as dashboard_panel:
                 render_dashboard(db, ui.element('div').classes('w-full'), dashboard_panel)
             with ui.tab_panel(providers_tab) as providers_panel:

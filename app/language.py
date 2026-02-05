@@ -186,6 +186,13 @@ i18n = {
     "response_text": {"en": "Response Text", "zh-TW": "回應文字", "zh-CN": "响应文字", "ko": "응답 텍스트", "ja": "レスポンステキスト"},
     "error_details": {"en": "Error Details", "zh-TW": "錯誤詳情", "zh-CN": "错误详情", "ko": "오류 상세", "ja": "エラー詳細"},
     "details": {"en": "Details", "zh-TW": "詳情", "zh-CN": "详情", "ko": "상세", "ja": "詳細"},
+    "menu": {"en": "Menu", "zh-TW": "選單", "zh-CN": "菜单", "ko": "메뉴", "ja": "メニュー"},
+    "dashboard_intro": {"en": "Visualize your API usage, success rates, and cost distribution at a glance.", "zh-TW": "一目了然地查看您的 API 使用情況、成功率和成本分佈。", "zh-CN": "一目了然地查看您的 API 使用情况、成功率和成本分布。", "ko": "API 사용량, 성공률 및 비용 분포를 한눈에 시각화하세요.", "ja": "APIの使用状況、成功率、コスト分布を一目で確認できます。"},
+    "providers_intro": {"en": "Manage your upstream API providers and their specific models and pricing.", "zh-TW": "管理您的上游 API 供應商及其特定模型和定價。", "zh-CN": "管理您的上游 API 供应商及其特定模型和定价。", "ko": "업스트림 API 공급자와 해당 모델 및 가격을 관리합니다.", "ja": "アップストリームAPIプロバイダーとその特定のモデルおよび価格を管理します。"},
+    "groups_intro": {"en": "Organize providers into logical groups for request pooling and priority-based failover.", "zh-TW": "將供應商組織成邏輯群組，用於請求池化和基於優先級的故障轉移。", "zh-CN": "将供应商组织成逻辑群组，用于请求池化和基于优先级的故障转移。", "ko": "요청 풀링 및 우선 순위 기반 장애 조치를 위해 공급자를 논리적 그룹으로 구성합니다.", "ja": "リクエストのプーリングと優先度ベースのフェイルオーバーのために、プロバイダーを論理グループに編成します。"},
+    "call_logs_intro": {"en": "Detailed tracking of every API request, including response times, token usage, and errors.", "zh-TW": "詳細追蹤每次 API 請求，包括回應時間、權杖使用量和錯誤。", "zh-CN": "详细追踪每次 API 请求，包括响应时间、令牌使用量和错误。", "ko": "응답 시간, 토큰 사용량 및 오류를 포함하여 모든 API 요청을 자세히 추적합니다.", "ja": "応答時間、トークン使用量、エラーなど、すべてのAPIリクエストを詳細に追跡します。"},
+    "keywords_intro": {"en": "Define custom failure patterns to detect issues even when HTTP status is 200 OK.", "zh-TW": "定義自訂失敗模式，即使 HTTP 狀態碼為 200 OK 也能檢測到問題。", "zh-CN": "定义自定义失败模式，即使 HTTP 状态码为 200 OK 也能检测到问题。", "ko": "HTTP 상태가 200 OK인 경우에도 문제를 감지하도록 사용자 지정 실패 패턴을 정의합니다.", "ja": "HTTPステータスが200 OKの場合でも問題を検出するためのカスタム失敗パターンを定義します。"},
+    "api_keys_intro": {"en": "Create and manage system API keys, assigning them to specific groups for controlled access.", "zh-TW": "建立和管理系統 API 金鑰，將其分配給特定群組以進行受控存取。", "zh-CN": "创建和管理系统 API 密钥，将其分配给特定群组以进行受控访问。", "ko": "시스템 API 키를 생성 및 관리하고 제어된 액세스를 위해 특정 그룹에 할당합니다.", "ja": "システムAPIキーを作成および管理し、制御されたアクセスのために特定のグループに割り当てます。"},
 }
 
 def get_text(key: str) -> str:
