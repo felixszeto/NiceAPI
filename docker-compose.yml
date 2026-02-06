@@ -1,0 +1,19 @@
+services:
+  frontend:
+    container_name: api-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "6670:6670"
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=6670
+    networks:
+      - my_external_network  
+
+# 定義自定義網絡
+networks:
+    my_external_network:
+        external: true

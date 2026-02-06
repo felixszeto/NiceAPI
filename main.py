@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -31,6 +32,15 @@ app = FastAPI(
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify the actual origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -67,8 +77,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
-from app.api import router as api_router
-app.include_router(api_router)
+from app.api import router as api_router, proxy_router
+app.include_router(api_router, prefix="/api")
+app.include_router(proxy_router) # Mount proxy routes at root for compatibility
+
+# Serve frontend static files if built (mounted at /admin)
+import os
 
 app.mount("/images", StaticFiles(directory="images"), name="images")
 app.mount("/css", StaticFiles(directory="css"), name="css")
@@ -109,6 +123,9 @@ async def on_startup():
         print("Active calls reset to 0.")
     finally:
         db.close()
+
+# API routes should be included before NiceGUI
+# (They are already included above)
 
 create_ui()
 ui.run_with(

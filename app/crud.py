@@ -10,12 +10,28 @@ def get_provider_by_name(db: Session, name: str):
     return db.query(models.ApiProvider).filter(models.ApiProvider.name == name).first()
 
 def get_providers(db: Session, skip: int = 0, limit: int = 1000, name_filter: str = None, endpoint_filter: str = None):
+    from sqlalchemy import or_
     query = db.query(models.ApiProvider)
     if name_filter:
-        query = query.filter(models.ApiProvider.name.contains(name_filter))
+        query = query.filter(or_(
+            models.ApiProvider.name.contains(name_filter),
+            models.ApiProvider.model.contains(name_filter)
+        ))
     if endpoint_filter:
         query = query.filter(models.ApiProvider.api_endpoint.contains(endpoint_filter))
     return query.offset(skip).limit(limit).all()
+
+def count_providers(db: Session, name_filter: str = None, endpoint_filter: str = None):
+    from sqlalchemy import or_
+    query = db.query(models.ApiProvider)
+    if name_filter:
+        query = query.filter(or_(
+            models.ApiProvider.name.contains(name_filter),
+            models.ApiProvider.model.contains(name_filter)
+        ))
+    if endpoint_filter:
+        query = query.filter(models.ApiProvider.api_endpoint.contains(endpoint_filter))
+    return query.count()
 
 def get_unique_endpoints(db: Session):
     return db.query(models.ApiProvider.api_endpoint).distinct().all()
@@ -80,43 +96,85 @@ def delete_providers_by_key(db: Session, api_key: str):
     return deleted_count
 
 def get_call_logs(db: Session, skip: int = 0, limit: int = 100, filter_success: bool | None = None):
-    from sqlalchemy.orm import joinedload
-    query = db.query(models.CallLog).options(joinedload(models.CallLog.details)).outerjoin(models.ApiProvider).order_by(models.CallLog.id.desc())
+    from sqlalchemy.orm import joinedload, load_only
+    # 進一步優化查詢性能：
+    # 1. 使用 load_only 只查詢列表顯示所需的欄位，徹底排除遺留的大文本 Body
+    # 2. 同時使用 joinedload 預加載 Provider 和 API Key，並限制它們加載的欄位 (避免 N+1)
+    query = db.query(models.CallLog).options(
+        load_only(
+            models.CallLog.id,
+            models.CallLog.provider_id,
+            models.CallLog.api_key_id,
+            models.CallLog.request_timestamp,
+            models.CallLog.is_success,
+            models.CallLog.status_code,
+            models.CallLog.response_time_ms,
+            models.CallLog.total_tokens,
+            models.CallLog.cost,
+            models.CallLog.error_message
+        ),
+        joinedload(models.CallLog.provider).load_only(
+            models.ApiProvider.id,
+            models.ApiProvider.name,
+            models.ApiProvider.model,
+            models.ApiProvider.api_endpoint
+        ),
+        joinedload(models.CallLog.api_key).load_only(
+            models.APIKey.id,
+            models.APIKey.key
+        )
+    ).order_by(models.CallLog.id.desc())
     if filter_success is not None:
         query = query.filter(models.CallLog.is_success == filter_success)
     return query.offset(skip).limit(limit).all()
+
+def get_call_log(db: Session, log_id: int):
+    from sqlalchemy.orm import joinedload
+    return db.query(models.CallLog).options(
+        joinedload(models.CallLog.details),
+        joinedload(models.CallLog.provider),
+        joinedload(models.CallLog.api_key)
+    ).filter(models.CallLog.id == log_id).first()
+
+def count_call_logs(db: Session, filter_success: bool | None = None):
+    query = db.query(models.CallLog)
+    if filter_success is not None:
+        query = query.filter(models.CallLog.is_success == filter_success)
+    return query.count()
 
 def get_error_keywords(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.ErrorMaintenance).order_by(models.ErrorMaintenance.id.desc()).offset(skip).limit(limit).all()
 
 def create_call_log(db: Session, log: schemas.CallLogCreate):
-    if log.provider_id:
-        provider = get_provider(db, log.provider_id)
-        if provider:
-            provider.total_calls += 1
-        if log.is_success:
-            provider.successful_calls += 1
+    try:
+        if log.provider_id:
+            provider = get_provider(db, log.provider_id)
+            if provider:
+                provider.total_calls += 1
+            if log.is_success:
+                provider.successful_calls += 1
 
-    # Extract body data to save in separate table
-    log_data = log.dict()
-    req_body = log_data.pop('request_body', None)
-    resp_body = log_data.pop('response_body', None)
+        # Extract body data to save in separate table via relationship
+        log_data = log.dict()
+        req_body = log_data.pop('request_body', None)
+        resp_body = log_data.pop('response_body', None)
 
-    db_log = models.CallLog(**log_data)
-    db.add(db_log)
-    db.commit()
-    db.refresh(db_log)
-
-    # Save details to CallLogDetail
-    db_detail = models.CallLogDetail(
-        id=db_log.id,
-        request_body=req_body,
-        response_body=resp_body
-    )
-    db.add(db_detail)
-    db.commit()
-    
-    return db_log
+        db_log = models.CallLog(**log_data)
+        
+        # Create detail record associated with the log
+        # SQLAlchemy will automatically link the IDs
+        db_log.details = models.CallLogDetail(
+            request_body=req_body,
+            response_body=resp_body
+        )
+        
+        db.add(db_log)
+        db.commit()
+        db.refresh(db_log)
+        return db_log
+    except Exception as e:
+        db.rollback()
+        raise e
 
 def get_error_keyword(db: Session, keyword_id: int):
     return db.query(models.ErrorMaintenance).filter(models.ErrorMaintenance.id == keyword_id).first()
@@ -175,7 +233,47 @@ def get_group_by_name(db: Session, name: str):
     return db.query(models.Group).filter(models.Group.name == name).first()
 
 def get_groups(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.Group).offset(skip).limit(limit).all()
+    from sqlalchemy.orm import joinedload
+    # 使用 joinedload 一次性加載關聯的 ProviderGroupAssociation 和 ApiProvider
+    groups = db.query(models.Group).options(
+        joinedload(models.Group.providers)
+    ).offset(skip).limit(limit).all()
+
+    # 由於 SQLAlchemy 的多對多 relationship 直接返回 ApiProvider，
+    # 而我們需要從 association 表中獲取 'priority' 字段，
+    # 這裡我們需要優化加載邏輯。
+    
+    # 重新查詢以包含關聯表數據
+    for group in groups:
+        associations = db.query(models.ProviderGroupAssociation).options(
+            joinedload(models.ProviderGroupAssociation.provider)
+        ).filter_by(group_id=group.id).all()
+        
+        provider_list = []
+        for assoc in associations:
+            if assoc.provider:
+                # 為了避免 Identity Map 污染（多個組共享同一個 Provider 實例時 priority 被互相覆蓋），
+                # 我們必須確保每個組擁有自己的 Provider 數據副本。
+                # 這裡最簡單的方法是從 DB 對象創建一個新的臨時對象。
+                p = models.ApiProvider(
+                    id=assoc.provider.id,
+                    name=assoc.provider.name,
+                    api_endpoint=assoc.provider.api_endpoint,
+                    api_key=assoc.provider.api_key,
+                    model=assoc.provider.model,
+                    price_per_million_tokens=assoc.provider.price_per_million_tokens,
+                    type=assoc.provider.type,
+                    is_active=assoc.provider.is_active,
+                    total_calls=assoc.provider.total_calls,
+                    successful_calls=assoc.provider.successful_calls
+                )
+                setattr(p, 'priority', assoc.priority)
+                provider_list.append(p)
+        group.providers = provider_list
+    return groups
+
+def count_groups(db: Session):
+    return db.query(models.Group).count()
 
 def create_group(db: Session, group: schemas.GroupCreate):
     db_group = models.Group(name=group.name)
@@ -202,7 +300,7 @@ def delete_group(db: Session, group_id: int):
         db.commit()
     return db_group
 
-def add_provider_to_group(db: Session, provider_id: int, group_id: int, priority: int = 1):
+def add_provider_to_group(db: Session, provider_id: int, group_id: int, priority: int = 1, commit: bool = True):
     stmt = insert(models.ProviderGroupAssociation).values(
         provider_id=provider_id,
         group_id=group_id,
@@ -214,7 +312,8 @@ def add_provider_to_group(db: Session, provider_id: int, group_id: int, priority
         set_=dict(priority=priority)
     )
     db.execute(stmt)
-    db.commit()
+    if commit:
+        db.commit()
     return get_provider(db, provider_id)
 
 def remove_provider_from_group(db: Session, provider_id: int, group_id: int):
@@ -409,3 +508,7 @@ def get_unique_providers(db: Session) -> List[schemas.ApiProviderSimple]:
             api_endpoint=r.api_endpoint
         ) for r in results
     ]
+
+def get_providers_simple(db: Session) -> List[schemas.ApiProviderSimple]:
+    """Returns basic info of all providers for the status API."""
+    return get_unique_providers(db)

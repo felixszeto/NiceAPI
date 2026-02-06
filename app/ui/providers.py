@@ -183,7 +183,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
                     return
                 progress_container.visible = True
                 try:
-                    api_url = "http://127.0.0.1:8001/api/import-models/"
+                    api_url = "http://47.106.65.25:8001/api/import-models/"
                     payload = {"base_url": base_url_input.value, "api_key": api_key_input.value, "alias": alias_input.value, "default_type": default_type_select.value, "filter_mode": filter_mode_select.value, "filter_keyword": filter_keyword_input.value}
                     async with httpx.AsyncClient() as client:
                         async with client.stream("POST", api_url, json=payload, timeout=None) as response:

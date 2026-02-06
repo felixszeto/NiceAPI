@@ -15,6 +15,8 @@ class ProviderGroupAssociation(Base):
     priority = Column(Integer, default=1)
     active_calls = Column(Integer, default=0) # Tracks current concurrent calls
 
+    provider = relationship("ApiProvider")
+
 # Association Table for the many-to-many relationship between ApiKey and Group
 api_key_group_association = Table('api_key_group_association', Base.metadata,
     Column('api_key_id', Integer, ForeignKey('api_keys.id'), primary_key=True),
@@ -73,11 +75,11 @@ class CallLog(Base):
     __tablename__ = "call_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    provider_id = Column(Integer, ForeignKey("api_providers.id"), nullable=True)
-    api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=True)
-    request_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(TAIPEI_TZ))
+    provider_id = Column(Integer, ForeignKey("api_providers.id"), nullable=True, index=True)
+    api_key_id = Column(Integer, ForeignKey("api_keys.id"), nullable=True, index=True)
+    request_timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(TAIPEI_TZ), index=True)
     response_timestamp = Column(DateTime(timezone=True), nullable=True)
-    is_success = Column(Boolean, nullable=False)
+    is_success = Column(Boolean, nullable=False, index=True)
     status_code = Column(Integer)
     response_time_ms = Column(Integer)
     error_message = Column(String, nullable=True)

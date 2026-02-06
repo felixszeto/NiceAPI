@@ -17,7 +17,7 @@ def _find_available_provider(db: Session, providers_query, failure_threshold=5, 
     
     if not potential_providers:
         logger.warning("No providers found matching the query criteria.")
-        return None
+        return None, None
 
     logger.info("Iterating through sorted provider list to find one that meets failover criteria:")
     for i, row in enumerate(potential_providers):

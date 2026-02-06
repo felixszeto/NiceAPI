@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import func, case, cast, Integer
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import asyncio
@@ -19,32 +20,183 @@ TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter() # Management APIs
+proxy_router = APIRouter() # OpenAI/Anthropic Compatibility APIs
 
-@router.get("/api/status", response_model=schemas.SystemStatusResponse)
+# Authentication dependency for internal management APIs
+from fastapi.security import OAuth2PasswordBearer
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+
+async def get_current_admin(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = utils.jwt.decode(token, utils.SECRET_KEY, algorithms=[utils.ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = schemas.TokenData(username=username)
+    except utils.JWTError:
+        raise credentials_exception
+    
+    import os
+    ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+    if token_data.username != ADMIN_USERNAME:
+        raise credentials_exception
+    return token_data.username
+
+@router.post("/auth/login", response_model=schemas.Token)
+async def login_for_access_token(login_data: schemas.LoginRequest):
+    import os
+    ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "password")
+    
+    if login_data.username != ADMIN_USERNAME or login_data.password != ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = utils.timedelta(minutes=utils.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = utils.create_access_token(
+        data={"sub": login_data.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@router.get("/status", response_model=schemas.SystemStatusResponse)
 def get_system_status(db: Session = Depends(get_db)):
     """
     Integrated public endpoint for Groups, Models, and Associations.
     """
     return {
-        "Groups": crud.get_groups(db),
-        "Models": crud.get_providers(db),
+        "Groups": [schemas.GroupSimple(id=g.id, name=g.name) for g in crud.get_groups(db)],
+        "Models": crud.get_providers_simple(db),
         "Association": crud.get_concurrency_status(db)
     }
 
-@router.get("/api/public/groups", response_model=List[schemas.GroupSimple])
+@router.get("/dashboard/stats", response_model=dict)
+def get_dashboard_stats(db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    from datetime import datetime, timedelta
+    
+    # 我們將統計範圍限制在最近 10,000 條記錄（或最近 30 天，這裡維持原邏輯的「最近」概念，但改用 ID 範圍或全表聚合）
+    # 為了性能，我們直接對數據庫進行聚合查詢
+    
+    # 1. 基礎統計 (Summary)
+    summary_query = db.query(
+        func.count(models.CallLog.id).label('total_calls'),
+        func.sum(case((models.CallLog.is_success == True, 1), else_=0)).label('success_calls'),
+        func.sum(models.CallLog.total_tokens).label('total_tokens'),
+        func.sum(models.CallLog.cost).label('total_cost')
+    ).filter(models.CallLog.provider_id.isnot(None)).first()
+    
+    total_calls = summary_query.total_calls or 0
+    success_rate = (summary_query.success_calls / total_calls * 100) if total_calls > 0 else 0
+    api_keys_count = db.query(func.count(models.APIKey.id)).scalar()
+
+    # 2. 模型使用分佈 & 平均響應時間 & 成本 (按模型分組)
+    # 這裡使用 JOIN 以獲取模型名稱
+    model_stats_query = db.query(
+        models.ApiProvider.model,
+        func.count(models.CallLog.id).label('count'),
+        func.avg(models.CallLog.response_time_ms).label('avg_time'),
+        func.sum(models.CallLog.cost).label('total_cost')
+    ).join(models.ApiProvider, models.CallLog.provider_id == models.ApiProvider.id)\
+     .group_by(models.ApiProvider.model).all()
+
+    model_distribution = [{"name": r.model, "value": r.count} for r in model_stats_query if r.model]
+    
+    model_names = sorted([r.model for r in model_stats_query if r.model])
+    model_avg_times = {r.model: round(r.avg_time or 0) for r in model_stats_query}
+    model_costs_map = {r.model: round(r.total_cost or 0, 4) for r in model_stats_query}
+
+    # 3. 每日調用次數 (最近 7 天)
+    now = datetime.now(TAIPEI_TZ)
+    start_date = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # SQLite 的日期處理比較特殊，這裡使用 func.date
+    daily_query = db.query(
+        func.date(models.CallLog.request_timestamp).label('date'),
+        func.count(models.CallLog.id).label('count')
+    ).filter(models.CallLog.request_timestamp >= start_date)\
+     .group_by(func.date(models.CallLog.request_timestamp))\
+     .order_by('date').all()
+
+    daily_counts_map = {r.date: r.count for r in daily_query}
+    sorted_dates = []
+    daily_data = []
+    for i in range(7):
+        d_str = (start_date + timedelta(days=i)).strftime('%Y-%m-%d')
+        sorted_dates.append(d_str)
+        daily_data.append(daily_counts_map.get(d_str, 0))
+
+    # 4. 端點統計 (Endpoint Stats)
+    endpoint_query = db.query(
+        models.ApiProvider.api_endpoint,
+        func.count(models.CallLog.id).label('total'),
+        func.sum(case((models.CallLog.is_success == True, 1), else_=0)).label('success'),
+        func.avg(models.CallLog.response_time_ms).label('avg_time')
+    ).join(models.ApiProvider, models.CallLog.provider_id == models.ApiProvider.id)\
+     .group_by(models.ApiProvider.api_endpoint).all()
+
+    from urllib.parse import urlparse
+    endpoint_names = []
+    endpoint_success_rates = []
+    endpoint_avg_times = []
+    endpoint_total_calls = []
+
+    for r in sorted(endpoint_query, key=lambda x: x.api_endpoint):
+        try:
+            name = urlparse(r.api_endpoint).netloc or r.api_endpoint
+        except:
+            name = r.api_endpoint
+        endpoint_names.append(name)
+        endpoint_total_calls.append(r.total)
+        endpoint_success_rates.append(round((r.success / r.total * 100)) if r.total > 0 else 0)
+        endpoint_avg_times.append(round(r.avg_time or 0))
+
+    return {
+        "summary": {
+            "total_calls": total_calls,
+            "success_rate": round(success_rate, 1),
+            "total_tokens": int(summary_query.total_tokens or 0),
+            "api_keys": api_keys_count,
+            "total_cost": round(summary_query.total_cost or 0, 4)
+        },
+        "model_distribution": model_distribution,
+        "daily_calls": {"dates": sorted_dates, "values": daily_data},
+        "endpoint_stats": {
+            "names": endpoint_names,
+            "success_rates": endpoint_success_rates,
+            "avg_times": endpoint_avg_times,
+            "total_calls": endpoint_total_calls
+        },
+        "model_stats": {
+            "names": model_names,
+            "avg_times": [model_avg_times.get(m, 0) for m in model_names]
+        },
+        "cost_stats": {
+            "names": model_names,
+            "values": [model_costs_map.get(m, 0) for m in model_names]
+        }
+    }
+
+@router.get("/public/groups", response_model=List[schemas.GroupSimple])
 def get_public_groups(db: Session = Depends(get_db)):
     """
     Public endpoint to get all groups (ID and Name only).
     """
-    return crud.get_groups(db)
+    return [schemas.GroupSimple(id=g.id, name=g.name) for g in crud.get_groups(db)]
 
-@router.get("/api/public/providers", response_model=List[schemas.ApiProviderSimple])
+@router.get("/public/providers", response_model=List[schemas.ApiProviderSimple])
 def get_public_providers(db: Session = Depends(get_db)):
     """
     Public endpoint to get basic info of all providers.
     """
-    return crud.get_providers(db)
+    return crud.get_providers_simple(db)
 
 # Security scheme
 auth_scheme = HTTPBearer()
@@ -150,50 +302,161 @@ async def get_api_key_from_anthropic_header(
         )
 
 
-@router.post("/api/providers/", response_model=schemas.ApiProvider)
-def create_provider(provider: schemas.ApiProviderCreate, db: Session = Depends(get_db)):
+@router.post("/providers/", response_model=schemas.ApiProvider)
+def create_provider(provider: schemas.ApiProviderCreate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
     return crud.create_provider(db=db, provider=provider)
 
-@router.get("/api/providers/", response_model=List[schemas.ApiProvider])
-def read_providers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    providers = crud.get_providers(db, skip=skip, limit=limit)
-    return providers
+@router.get("/providers/", response_model=schemas.ProviderListResponse)
+def read_providers(skip: int = 0, limit: int = 100, name_filter: Optional[str] = None, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    providers = crud.get_providers(db, skip=skip, limit=limit, name_filter=name_filter)
+    total = crud.count_providers(db, name_filter=name_filter)
+    return {"items": providers, "total": total}
 
-@router.get("/api/providers/{provider_id}", response_model=schemas.ApiProvider)
-def read_provider(provider_id: int, db: Session = Depends(get_db)):
+@router.get("/providers/{provider_id}", response_model=schemas.ApiProvider)
+def read_provider(provider_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
     db_provider = crud.get_provider(db, provider_id=provider_id)
     if db_provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
     return db_provider
 
+@router.patch("/providers/{provider_id}", response_model=schemas.ApiProvider)
+def update_provider(provider_id: int, provider_data: dict, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    db_provider = crud.update_provider(db, provider_id, provider_data)
+    if not db_provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return db_provider
+
+@router.delete("/providers/{provider_id}")
+def delete_provider(provider_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    db_provider = crud.delete_provider(db, provider_id)
+    if not db_provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return {"detail": "Provider deleted"}
+
+@router.delete("/providers/quick-remove/{api_key}")
+def quick_remove_providers(api_key: str, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    count = crud.delete_providers_by_key(db, api_key)
+    return {"detail": f"Removed {count} providers", "count": count}
+
+@router.post("/providers/sync")
+async def sync_providers(request: schemas.ModelImportRequest, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    """
+    Synchronous version of model import (for simple UI calls)
+    """
+    # ... logic handled by background or simple loop ...
+    # Re-using the logic from import_models but without streaming
+    clean_base = request.base_url.strip().rstrip('/')
+    if clean_base.endswith('/v1'):
+        clean_base = clean_base[:-3].rstrip('/')
+    v1_base_url = f"{clean_base}/v1"
+    
+    models_url = f"{v1_base_url}/models"
+    headers = {"Authorization": f"Bearer {request.api_key}"}
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(models_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail="Failed to fetch models from provider")
+        models_data = response.json()
+
+    models_list = models_data.get('data', [])
+    if request.filter_keyword and request.filter_mode != 'None':
+        keyword = request.filter_keyword.lower()
+        if request.filter_mode == 'Include':
+            models_list = [m for m in models_list if m.get('id') and keyword in m.get('id').lower()]
+        elif request.filter_mode == 'Exclude':
+            models_list = [m for m in models_list if m.get('id') and keyword not in m.get('id').lower()]
+
+    imported = 0
+    for model_info in models_list:
+        model_id = model_info.get('id')
+        if not model_id: continue
+        
+        target_endpoint = f"{v1_base_url}/chat/completions"
+        existing = db.query(models.ApiProvider).filter(
+            models.ApiProvider.api_endpoint == target_endpoint,
+            models.ApiProvider.api_key == request.api_key,
+            models.ApiProvider.model == model_id
+        ).first()
+        
+        if existing: continue
+        
+        formatted_name = request.alias if request.alias else model_id.replace('/', '.')
+        # For NVIDIA and other model-specific providers, ensure the endpoint includes the model if necessary,
+        # but the primary fix requested is ensuring 'model' field (model_id) is used correctly.
+        provider_data = schemas.ApiProviderCreate(
+            name=formatted_name,
+            api_endpoint=target_endpoint,
+            api_key=request.api_key,
+            model=model_id, # Ensure this is the raw model_id from the provider
+            price_per_million_tokens=0,
+            type=request.default_type,
+            is_active=True
+        )
+        crud.create_provider(db, provider_data)
+        imported += 1
+        
+    return {"detail": f"Synced {imported} models", "count": imported}
+
 # Endpoints for Groups
-@router.post("/api/groups/", response_model=schemas.Group)
-def create_group(group: schemas.GroupCreate, db: Session = Depends(get_db)):
+@router.post("/groups/", response_model=schemas.Group)
+def create_group(group: schemas.GroupCreate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
     db_group = crud.get_group_by_name(db, name=group.name)
     if db_group:
         raise HTTPException(status_code=400, detail="Group with this name already exists")
     return crud.create_group(db=db, group=group)
 
-@router.get("/api/groups/", response_model=List[schemas.Group])
-def read_groups(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@router.get("/groups/", response_model=schemas.GroupListResponse)
+def read_groups(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
     groups = crud.get_groups(db, skip=skip, limit=limit)
-    return groups
+    total = crud.count_groups(db)
+    return {"items": groups, "total": total}
 
-@router.post("/api/groups/{group_id}/providers/{provider_id}", response_model=schemas.ApiProvider)
-def add_provider_to_group(group_id: int, provider_id: int, db: Session = Depends(get_db)):
-    provider = crud.add_provider_to_group(db, provider_id=provider_id, group_id=group_id)
+@router.delete("/groups/{group_id}")
+def delete_group(group_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    db_group = crud.delete_group(db, group_id)
+    if not db_group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return {"detail": "Group deleted"}
+
+@router.post("/groups/{group_id}/providers/{provider_id}", response_model=schemas.ApiProvider)
+def add_provider_to_group(group_id: int, provider_id: int, priority_data: dict = None, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    priority = 1
+    if priority_data and "priority" in priority_data:
+        priority = priority_data["priority"]
+    
+    provider = crud.add_provider_to_group(db, provider_id=provider_id, group_id=group_id, priority=priority)
     if not provider:
         raise HTTPException(status_code=404, detail="Provider or Group not found")
     return provider
 
-@router.delete("/api/groups/{group_id}/providers/{provider_id}", response_model=schemas.ApiProvider)
-def remove_provider_from_group(group_id: int, provider_id: int, db: Session = Depends(get_db)):
-    provider = crud.remove_provider_from_group(db, provider_id=provider_id, group_id=group_id)
-    if not provider:
+@router.delete("/groups/{group_id}/providers/{provider_id}")
+def remove_provider_from_group(group_id: int, provider_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    success = crud.remove_provider_from_group(db, provider_id=provider_id, group_id=group_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Provider or Group not found, or provider not in group")
-    return provider
+    return {"detail": "Provider removed from group"}
 
-@router.post("/v1/chat/completions")
+@router.put("/groups/{group_id}/providers")
+def update_group_providers(group_id: int, providers_data: List[dict], db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    """
+    Batch update providers in a group.
+    Expected format: [{"id": 1, "priority": 1, "selected": true}, ...]
+    """
+    # Remove all existing associations for this group
+    db.query(models.ProviderGroupAssociation).filter(
+        models.ProviderGroupAssociation.group_id == group_id
+    ).delete(synchronize_session=False)
+    
+    # Add new associations
+    for p in providers_data:
+        if p.get('selected'):
+            crud.add_provider_to_group(db, provider_id=p['id'], group_id=group_id, priority=p.get('priority', 99), commit=False)
+    
+    db.commit()
+    return {"detail": "Group providers updated"}
+
+@proxy_router.post("/v1/chat/completions")
 async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     
     # --- Permission Check ---
@@ -303,6 +566,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                     provider_api_key = provider.api_key
                     headers = {"Authorization": f"Bearer {provider_api_key}", "Content-Type": "application/json"}
                     payload = request.dict(exclude_unset=True)
+                    # Ensure we use the provider's actual model ID, not the group name or alias
                     payload['model'] = provider.model
                     payload['stream'] = True
 
@@ -426,7 +690,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 ))
                 raise HTTPException(status_code=503, detail=error_info)
 
-            logger.info(f"Non-streaming attempt with provider: {provider.name} (ID: {provider.id})")
+            logger.info(f"Non-streaming attempt with provider: {provider.model} (ID: {provider.id})")
             start_time = time.time()
             
             # Increment active calls
@@ -438,6 +702,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 provider_api_key = provider.api_key
                 headers = {"Authorization": f"Bearer {provider_api_key}", "Content-Type": "application/json"}
                 payload = request.dict(exclude_unset=True)
+                # Ensure we use the provider's actual model ID, not the group name or alias
                 payload['model'] = provider.model
                 payload['stream'] = False
                 failure_keywords = [kw.keyword.lower() for kw in crud.get_all_active_error_keywords(db)]
@@ -459,13 +724,17 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 end_time = time.time()
                 usage = response_json.get("usage", {})
                 cost = crud.calculate_cost(provider, usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"))
-                crud.create_call_log(db, schemas.CallLogCreate(
-                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
-                    status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
-                    prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
-                    total_tokens=usage.get("total_tokens"), cost=cost,
-                    request_body=json.dumps(request.dict()), response_body=json.dumps(response_json)
-                ))
+                try:
+                    crud.create_call_log(db, schemas.CallLogCreate(
+                        provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
+                        status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
+                        prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"),
+                        total_tokens=usage.get("total_tokens"), cost=cost,
+                        request_body=json.dumps(request.dict()), response_body=json.dumps(response_json)
+                    ))
+                except Exception as log_err:
+                    logger.error(f"Failed to create success call log: {log_err}")
+                    db.rollback()
                 logger.info(f"--- Non-streaming Response Success (Provider ID: {provider.id}) ---")
                 logger.info(f"Response JSON: {json.dumps(response_json)}")
                 # Sanitize response to remove non-standard fields and <think> tags
@@ -481,11 +750,15 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 else:
                     logger.warning(f"Provider {provider.name} (ID: {provider.id}) failed: {e}")
                 
-                crud.create_call_log(db, schemas.CallLogCreate(
-                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
-                    status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=str(e),
-                    request_body=json.dumps(request.dict()), response_body=response_body
-                ))
+                try:
+                    crud.create_call_log(db, schemas.CallLogCreate(
+                        provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=False,
+                        status_code=status_code, response_time_ms=int((end_time - start_time) * 1000), error_message=str(e),
+                        request_body=json.dumps(request.dict()), response_body=response_body
+                    ))
+                except Exception as log_err:
+                    logger.error(f"Failed to create failure call log: {log_err}")
+                    db.rollback()
 
                 error_str = str(e).lower()
                 if "insufficient" in error_str and "quota" in error_str:
@@ -502,8 +775,8 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 if group_id:
                     crud.decrement_active_calls(db, provider.id, group_id)
 
-@router.post("/api/import-models/")
-async def import_models(request: schemas.ModelImportRequest):
+@router.post("/import-models/")
+async def import_models(request: schemas.ModelImportRequest, admin: str = Depends(get_current_admin)):
     async def progress_stream():
         db = SessionLocal()
         try:
@@ -547,6 +820,26 @@ async def import_models(request: schemas.ModelImportRequest):
             yield f"data: TOTAL={total_models}\n\n"
             await asyncio.sleep(0.1)
 
+            # Keep track of models returned by the provider
+            fetched_model_ids = {m.get('id') for m in models_list if m.get('id')}
+            target_endpoint = f"{v1_base_url}/chat/completions"
+
+            # Requirement: If a model exists in DB for this endpoint but NOT in the fetched list, mark as inactive
+            db_existing_models = db.query(models.ApiProvider).filter(
+                models.ApiProvider.api_endpoint == target_endpoint,
+                models.ApiProvider.api_key == request.api_key
+            ).all()
+
+            deactivated_count = 0
+            for db_p in db_existing_models:
+                if db_p.model not in fetched_model_ids and db_p.is_active:
+                    db_p.is_active = False
+                    deactivated_count += 1
+            
+            if deactivated_count > 0:
+                db.commit()
+                logger.info(f"Deactivated {deactivated_count} models that are no longer available at {target_endpoint}")
+
             imported_count = 0
             for i, model_info in enumerate(models_list):
                 model_id = model_info.get('id')
@@ -559,7 +852,9 @@ async def import_models(request: schemas.ModelImportRequest):
                 formatted_name = request.alias if request.alias else model_id.replace('/', '.')
 
                 # Requirement: Use api_endpoint + api_key + model together as uniqueness check
+                # Some providers might need the model in the path, but standard OpenAI is /chat/completions
                 target_endpoint = f"{v1_base_url}/chat/completions"
+                
                 existing_provider = db.query(models.ApiProvider).filter(
                     models.ApiProvider.api_endpoint == target_endpoint,
                     models.ApiProvider.api_key == request.api_key,
@@ -568,6 +863,8 @@ async def import_models(request: schemas.ModelImportRequest):
                 
                 if existing_provider:
                     logger.info(f"Provider with endpoint={target_endpoint}, key={request.api_key[:5]}..., model={model_id} already exists. Skipping.")
+                    imported_count += 1
+                    yield f"data: PROGRESS={imported_count}\n\n"
                     continue
 
                 provider_data = schemas.ApiProviderCreate(
@@ -605,7 +902,7 @@ async def import_models(request: schemas.ModelImportRequest):
 
     return StreamingResponse(progress_stream(), media_type="text/event-stream")
 
-@router.get("/v1/models", response_model=schemas.ModelListResponse)
+@proxy_router.get("/v1/models", response_model=schemas.ModelListResponse)
 def get_models_list(db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     """
     Returns a list of models available to the authenticated API key,
@@ -618,7 +915,7 @@ def get_models_list(db: Session = Depends(get_db), api_key: models.APIKey = Depe
     
     return schemas.ModelListResponse(data=data)
 
-@router.post("/v1/responses")
+@proxy_router.post("/v1/responses")
 async def responses_proxy(request: schemas.ChatRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     """
     OpenAI compatible endpoint /v1/responses.
@@ -626,7 +923,7 @@ async def responses_proxy(request: schemas.ChatRequest, db: Session = Depends(ge
     """
     return await chat(request, db, api_key)
 
-@router.post("/v1/messages")
+@proxy_router.post("/v1/messages")
 async def messages_proxy(request: schemas.AnthropicChatRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_anthropic_header)):
     """
     Anthropic compatible endpoint /v1/messages.
@@ -727,7 +1024,7 @@ async def messages_proxy(request: schemas.AnthropicChatRequest, db: Session = De
 
     return anthropic_response
 
-@router.post("/v1/completions")
+@proxy_router.post("/v1/completions")
 async def completions(request: schemas.CompletionRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     """
     OpenAI legacy completions API.
@@ -746,7 +1043,7 @@ async def completions(request: schemas.CompletionRequest, db: Session = Depends(
         if group_id:
             crud.increment_active_calls(db, provider.id, group_id)
         try:
-            api_url = provider.api_endpoint.replace("/chat/completions", "/completions")
+            api_url = provider.api_endpoint.replace("/chat/completions", "/completions") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = request.dict(exclude_unset=True)
             payload['model'] = provider.model
@@ -758,7 +1055,7 @@ async def completions(request: schemas.CompletionRequest, db: Session = Depends(
             response_json = response.json()
             # Log success
             crud.create_call_log(db, schemas.CallLogCreate(
-                provider_id=provider.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
+                provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
                 status_code=response.status_code, response_time_ms=int((time.time() - start_time) * 1000),
                 response_body=json.dumps(response_json)
             ))
@@ -770,7 +1067,7 @@ async def completions(request: schemas.CompletionRequest, db: Session = Depends(
             if group_id:
                 crud.decrement_active_calls(db, provider.id, group_id)
 
-@router.post("/v1/embeddings")
+@proxy_router.post("/v1/embeddings")
 async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     """
     OpenAI Embeddings API.
@@ -786,7 +1083,7 @@ async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(ge
         if group_id:
             crud.increment_active_calls(db, provider.id, group_id)
         try:
-            api_url = provider.api_endpoint.replace("/chat/completions", "/embeddings")
+            api_url = provider.api_endpoint.replace("/chat/completions", "/embeddings") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = request.dict(exclude_unset=True)
             payload['model'] = provider.model
@@ -803,7 +1100,80 @@ async def embeddings(request: schemas.EmbeddingRequest, db: Session = Depends(ge
             if group_id:
                 crud.decrement_active_calls(db, provider.id, group_id)
 
-@router.post("/v1/images/generations")
+# --- Management APIs for Logs, Keys, Keywords, Settings ---
+
+@router.get("/logs/", response_model=schemas.CallLogResponse)
+def read_call_logs(skip: int = 0, limit: int = 100, filter_success: Optional[bool] = None, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    # 這裡返回的 logs 將會根據 schemas.CallLogSummary 進行序列化
+    # 確保不包含任何 details 或 body 欄位，從而避免 SQLAlchemy 觸發延遲加載
+    logs = crud.get_call_logs(db, skip=skip, limit=limit, filter_success=filter_success)
+    total = crud.count_call_logs(db, filter_success=filter_success)
+    return {"items": logs, "total": total}
+
+@router.get("/logs/{log_id}", response_model=schemas.CallLog)
+def read_call_log(log_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    db_log = crud.get_call_log(db, log_id=log_id)
+    if db_log is None:
+        raise HTTPException(status_code=404, detail="Log not found")
+    
+    # 為了兼容性，如果 details 存在，將 body 合併到主對象中
+    # 如果 details 不存在，則自動使用 CallLog 表中可能存在的舊數據
+    if db_log.details:
+        db_log.request_body = db_log.details.request_body
+        db_log.response_body = db_log.details.response_body
+        
+    # 避免在 response 中重複發送 details 對象 (因為 body 已經提到頂層了)
+    # 這樣可以減少傳輸體積
+    db_log.details = None
+        
+    return db_log
+
+@router.get("/keys/", response_model=List[schemas.APIKey])
+def read_api_keys(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.get_api_keys(db, skip=skip, limit=limit)
+
+@router.post("/keys/", response_model=schemas.APIKey)
+def create_api_key(api_key: schemas.APIKeyCreate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.create_api_key(db, api_key)
+
+@router.patch("/keys/{key_id}", response_model=schemas.APIKey)
+def update_api_key(key_id: int, api_key: schemas.APIKeyUpdate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.update_api_key(db, key_id, api_key)
+
+@router.delete("/keys/{key_id}")
+def delete_api_key(key_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    crud.delete_api_key(db, key_id)
+    return {"detail": "API key deleted"}
+
+@router.get("/keywords/", response_model=List[schemas.ErrorKeyword])
+def read_error_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.get_error_keywords(db, skip=skip, limit=limit)
+
+@router.post("/keywords/", response_model=schemas.ErrorKeyword)
+def create_error_keyword(keyword: schemas.ErrorKeywordCreate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.create_error_keyword(db, keyword)
+
+@router.patch("/keywords/{keyword_id}", response_model=schemas.ErrorKeyword)
+def update_error_keyword(keyword_id: int, keyword_data: dict, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.update_error_keyword(db, keyword_id, keyword_data)
+
+@router.delete("/keywords/{keyword_id}")
+def delete_error_keyword(keyword_id: int, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    crud.delete_error_keyword(db, keyword_id)
+    return {"detail": "Keyword deleted"}
+
+@router.get("/settings/{key}", response_model=schemas.Setting)
+def get_setting(key: str, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    setting = crud.get_setting(db, key)
+    if not setting:
+        raise HTTPException(status_code=404, detail="Setting not found")
+    return setting
+
+@router.post("/settings/", response_model=schemas.Setting)
+def update_setting(setting: schemas.SettingCreate, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+    return crud.update_setting(db, setting.key, setting.value)
+
+@proxy_router.post("/v1/images/generations")
 async def image_generation(request: schemas.ImageGenerationRequest, db: Session = Depends(get_db), api_key: models.APIKey = Depends(get_api_key_from_bearer)):
     """
     OpenAI Image Generation API.
@@ -818,7 +1188,7 @@ async def image_generation(request: schemas.ImageGenerationRequest, db: Session 
             raise HTTPException(status_code=503, detail="No provider found for image generation.")
 
         try:
-            api_url = provider.api_endpoint.replace("/chat/completions", "/images/generations")
+            api_url = provider.api_endpoint.replace("/chat/completions", "/images/generations") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
             headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
             payload = request.dict(exclude_unset=True)
             payload['model'] = provider.model
@@ -834,3 +1204,78 @@ async def image_generation(request: schemas.ImageGenerationRequest, db: Session 
         finally:
             if group_id:
                 crud.decrement_active_calls(db, provider.id, group_id)
+
+# --- Remote Public Management APIs (Auth via API Key) ---
+
+@router.get("/remote/status")
+def get_remote_status(api_key: str, db: Session = Depends(get_db)):
+    db_api_key = crud.get_api_key_by_key(db, api_key)
+    if not db_api_key or not db_api_key.is_active:
+        raise HTTPException(status_code=401, detail="Invalid or inactive API Key")
+    
+    results = []
+    for group in db_api_key.groups:
+        # Get associations for this group, sorted by priority
+        associations = db.query(models.ProviderGroupAssociation).filter_by(group_id=group.id).order_by(models.ProviderGroupAssociation.priority.asc()).all()
+        
+        provider_list = []
+        for assoc in associations:
+            provider = crud.get_provider(db, assoc.provider_id)
+            if provider:
+                provider_list.append({
+                    "id": provider.id,
+                    "name": provider.name,
+                    "model": provider.model,
+                    "priority": assoc.priority
+                })
+        
+        results.append({
+            "id": group.id,
+            "name": group.name,
+            "providers": provider_list
+        })
+    return results
+
+@router.post("/remote/move-to-top")
+def remote_move_to_top(api_key: str, group_id: int, provider_id: int, db: Session = Depends(get_db)):
+    db_api_key = crud.get_api_key_by_key(db, api_key)
+    if not db_api_key or not db_api_key.is_active:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    # Check if this group belongs to the API key
+    if group_id not in [g.id for g in db_api_key.groups]:
+        raise HTTPException(status_code=403, detail="Group not authorized for this API Key")
+    
+    # Get all current associations for the group
+    associations = db.query(models.ProviderGroupAssociation).filter_by(group_id=group_id).order_by(models.ProviderGroupAssociation.priority.asc()).all()
+    pids = [a.provider_id for a in associations]
+    
+    if provider_id not in pids:
+        raise HTTPException(status_code=404, detail="Provider not found in this group")
+    
+    # Re-order: move provider_id to index 0
+    pids.remove(provider_id)
+    pids.insert(0, provider_id)
+    
+    # Update priorities in DB
+    for idx, pid in enumerate(pids):
+        crud.add_provider_to_group(db, provider_id=pid, group_id=group_id, priority=idx+1)
+    
+    db.commit()
+    return {"detail": "Priority updated successfully"}
+
+@router.post("/remote/update-order")
+def remote_update_order(api_key: str, group_id: int, provider_ids: List[int], db: Session = Depends(get_db)):
+    db_api_key = crud.get_api_key_by_key(db, api_key)
+    if not db_api_key or not db_api_key.is_active:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    
+    if group_id not in [g.id for g in db_api_key.groups]:
+        raise HTTPException(status_code=403, detail="Group not authorized")
+    
+    # Update all provided IDs with their new sequential priority
+    for idx, pid in enumerate(provider_ids):
+        crud.add_provider_to_group(db, provider_id=pid, group_id=group_id, priority=idx+1)
+    
+    db.commit()
+    return {"detail": "Order updated successfully"}

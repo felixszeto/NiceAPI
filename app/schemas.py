@@ -27,12 +27,19 @@ class Group(BaseModel):
     class Config:
         from_attributes = True
 
-class ApiProvider(ApiProviderBase):
+class ApiProviderSlim(ApiProviderBase):
     id: int
-    groups: List["Group"] = []
 
     class Config:
         from_attributes = True
+
+class ApiProvider(ApiProviderSlim):
+    api_key: Optional[str] = None
+    groups: List["Group"] = []
+
+class ProviderListResponse(BaseModel):
+    items: List[ApiProvider]
+    total: int
 
 # Schemas for Group
 class GroupBase(BaseModel):
@@ -41,22 +48,31 @@ class GroupBase(BaseModel):
 class GroupCreate(GroupBase):
     pass
 
-class Group(GroupBase):
+class ApiProviderInGroup(ApiProviderBase):
     id: int
-    providers: List[ApiProvider] = []
+    priority: Optional[int] = 99
 
     class Config:
         from_attributes = True
 
+class Group(GroupBase):
+    id: int
+    providers: List[ApiProviderInGroup] = []
 
+    class Config:
+        from_attributes = True
+
+class GroupListResponse(BaseModel):
+    items: List[Group]
+    total: int
 
 # Schema for importing models from a base URL
 class ModelImportRequest(BaseModel):
     base_url: str
     api_key: str
     alias: Optional[str] = None
-    default_type: str = "per_token"
-    filter_mode: Optional[str] = None
+    default_type: Optional[str] = "per_token"
+    filter_mode: Optional[str] = "None"
     filter_keyword: Optional[str] = None
 
 # Schema for the main chat request
@@ -132,16 +148,18 @@ class APIKeyCreate(APIKeyBase):
 class APIKeyUpdate(APIKeyBase):
     group_ids: Optional[List[int]] = None
 
-class APIKey(APIKeyBase):
+class APIKeySlim(APIKeyBase):
     id: int
     key: str
+
+    class Config:
+        from_attributes = True
+
+class APIKey(APIKeySlim):
     created_at: datetime
     last_used_at: Optional[datetime] = None
     groups: List[Group] = []
     call_count: Optional[int] = None
-
-    class Config:
-        from_attributes = True
 
 # Schemas for CallLog
 class CallLogBase(BaseModel):
@@ -178,9 +196,36 @@ class CallLog(CallLogBase):
     details: Optional[CallLogDetail] = None
     request_timestamp: Optional[datetime] = None
     response_timestamp: Optional[datetime] = None
+    provider: Optional[ApiProviderSlim] = None
+    api_key: Optional[APIKeySlim] = None
 
     class Config:
         from_attributes = True
+
+# 專用於列表顯示的摘要模式，不包含任何大文本欄位
+class CallLogSummary(BaseModel):
+    id: int
+    provider_id: Optional[int] = None
+    api_key_id: Optional[int] = None
+    request_timestamp: Optional[datetime] = None
+    response_timestamp: Optional[datetime] = None
+    is_success: bool
+    status_code: int
+    response_time_ms: int
+    error_message: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost: Optional[float] = None
+    provider: Optional[ApiProviderSlim] = None
+    api_key: Optional[APIKeySlim] = None
+
+    class Config:
+        from_attributes = True
+
+class CallLogResponse(BaseModel):
+    items: List[CallLogSummary]
+    total: int
 
 # Schemas for OpenAI-compatible model list
 class ModelResponse(BaseModel):
@@ -272,3 +317,15 @@ class AnthropicChatResponse(BaseModel):
     stop_reason: Optional[str] = "end_turn"
     stop_sequence: Optional[str] = None
     usage: AnthropicUsage
+
+# Auth schemas
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str

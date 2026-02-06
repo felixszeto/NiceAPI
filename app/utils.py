@@ -1,8 +1,20 @@
 import re
 import json
 import logging
+import os
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 
 logger = logging.getLogger(__name__)
+
+# Security configuration
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "a_very_secret_key_for_jwt_tokens_change_it_in_production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def sanitize_openai_response(response_dict: dict) -> dict:
     """
@@ -45,3 +57,19 @@ def filter_think_tag_from_chunk(chunk_text: str) -> str:
     # If the chunk contains the whole tag, remove it.
     # For more robust filtering, a state machine in the stream generator is needed.
     return re.sub(r'<think>.*?</think>', '', chunk_text, flags=re.DOTALL)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
