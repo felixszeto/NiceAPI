@@ -9,6 +9,10 @@ export default defineConfig({
       '/api': {
         target: 'http://47.106.65.25:8001',
         changeOrigin: true
+      },
+      '/v1': {
+        target: 'http://47.106.65.25:8001',
+        changeOrigin: true
       }
     }
   }

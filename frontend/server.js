@@ -18,6 +18,15 @@ app.use('/api', createProxyMiddleware({
   },
 }));
 
+// 代理 /v1 請求到外部伺服器
+app.use('/v1', createProxyMiddleware({
+  target: 'http://47.106.65.25:8001/v1',
+  changeOrigin: true,
+  pathRewrite: {
+    '^/v1': '/v1',
+  },
+}));
+
 // 提供靜態文件
 app.use(express.static(path.join(__dirname, 'dist')));
 
@@ -28,5 +37,6 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-  console.log(`Proxying /api to http://47.106.65.25:8001`);
+  console.log(`Proxying /api to http://47.106.65.25:8001/api`);
+  console.log(`Proxying /v1 to http://47.106.65.25:8001/v1`);
 });

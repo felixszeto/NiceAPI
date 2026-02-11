@@ -140,3 +140,4 @@ cython_debug/
 # SQLite database
 *.db
 *.db-journal
+.lh**
