@@ -1,186 +1,286 @@
 <template>
-  <div class="logs-container">
-    <div class="header">
-      <div class="title-row">
-        <h2>調用日誌</h2>
-        <el-button type="primary" link icon="Refresh" :loading="loading" @click="fetchLogs">刷新</el-button>
+  <div class="space-y-6">
+    <!-- 頁面標題列 -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h1 class="text-xl font-semibold text-gray-900">調用日誌</h1>
+        <p class="text-sm text-gray-500 mt-1">查看 API 請求與回應的詳細歷史紀錄</p>
       </div>
-      <div class="tabs-row">
-        <el-tabs v-model="activeTab" @tab-change="handleTabChange">
-          <el-tab-pane label="全部請求" name="all" />
-          <el-tab-pane label="成功請求" name="successful" />
-          <el-tab-pane label="失敗請求" name="failed" />
-        </el-tabs>
+      <div class="flex items-center gap-2 self-end sm:self-auto">
+        <el-button :icon="Refresh" @click="fetchLogs" :loading="loading" circle />
       </div>
     </div>
 
-    <el-table :data="logs" style="width: 100%" v-loading="loading" size="small" border stripe>
-      <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column label="API 金鑰" width="140">
-        <template #default="scope">
-          <code>{{ formatApiKey(scope.row) }}</code>
-        </template>
-      </el-table-column>
-      <el-table-column label="模型" width="150" show-overflow-tooltip>
-        <template #default="scope">
-          {{ getModelName(scope.row) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="請求位址" min-width="180" show-overflow-tooltip>
-        <template #default="scope">
-          {{ scope.row.provider?.api_endpoint || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="時間" width="160">
-        <template #default="scope">
-          {{ formatDateTime(scope.row.request_timestamp) }}
-        </template>
-      </el-table-column>
-      <el-table-column label="成功" width="70" align="center">
-        <template #default="scope">
-          <el-icon :color="scope.row.is_success ? '#67C23A' : '#F56C6C'">
-            <component :is="scope.row.is_success ? 'Check' : 'Close'" />
-          </el-icon>
-        </template>
-      </el-table-column>
-      <el-table-column prop="status_code" label="狀態碼" width="80" align="center" />
-      <el-table-column prop="response_time_ms" label="耗時(ms)" width="100" align="right" />
-      <el-table-column prop="total_tokens" label="Tokens" width="100" align="right" />
-      <el-table-column label="費用" width="100" align="right">
-        <template #default="scope">
-          {{ scope.row.cost !== null ? scope.row.cost.toFixed(6) : 'N/A' }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="error_message" label="錯誤訊息" show-overflow-tooltip>
-        <template #default="scope">
-          <el-button v-if="scope.row.error_message" type="danger" link size="small" @click="showError(scope.row)">
-            詳情
-          </el-button>
-          <span v-else>-</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="80" align="center">
-        <template #default="scope">
-          <el-button type="primary" link icon="View" @click="showDetails(scope.row)" />
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 標籤頁過濾 -->
+    <div class="bg-white rounded-xl border border-gray-200 p-1 flex items-center shadow-sm">
+      <div
+        v-for="tab in tabs"
+        :key="tab.name"
+        class="flex-1 text-center py-2 px-3 rounded-lg cursor-pointer transition-all text-sm font-medium"
+        :class="activeTab === tab.name ? 'bg-blue-50 text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'"
+        @click="handleTabChange(tab.name)"
+      >
+        {{ tab.label }}
+      </div>
+    </div>
 
-    <div class="pagination">
+    <!-- 桌面端表格 -->
+    <div class="hidden lg:block bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <el-table :data="logs" v-loading="loading" size="small" stripe>
+        <el-table-column prop="id" label="ID" width="70" />
+        <el-table-column label="API 金鑰" width="140">
+          <template #default="scope">
+            <code class="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded font-mono text-gray-600">
+              {{ formatApiKey(scope.row) }}
+            </code>
+          </template>
+        </el-table-column>
+        <el-table-column label="模型" min-width="150" show-overflow-tooltip>
+          <template #default="scope">
+            <span class="font-medium text-gray-700">{{ getModelName(scope.row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="狀態" width="90" align="center">
+          <template #default="scope">
+            <div class="flex flex-col items-center">
+              <el-tag
+                :type="scope.row.is_success ? 'success' : 'danger'"
+                size="small"
+                effect="light"
+                class="!rounded-md"
+              >
+                {{ scope.row.status_code }}
+              </el-tag>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="耗時" width="100" align="right">
+          <template #default="scope">
+            <span :class="scope.row.response_time_ms > 10000 ? 'text-amber-600 font-medium' : 'text-gray-600'">
+              {{ scope.row.response_time_ms }} ms
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_tokens" label="Tokens" width="90" align="right" />
+        <el-table-column label="費用" width="110" align="right">
+          <template #default="scope">
+            <span class="text-xs text-gray-500 font-mono">
+              ${{ scope.row.cost !== null ? scope.row.cost.toFixed(6) : '0.000000' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="時間" width="160">
+          <template #default="scope">
+            <span class="text-[11px] text-gray-400">{{ formatDateTime(scope.row.request_timestamp) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" align="center" fixed="right">
+          <template #default="scope">
+            <el-button type="primary" link :icon="View" size="small" @click="showDetails(scope.row)" />
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- 移動端/中尺寸卡片 -->
+    <div class="lg:hidden space-y-3" v-loading="loading">
+      <div
+        v-for="row in logs"
+        :key="row.id"
+        class="bg-white rounded-xl border border-gray-200 p-4 space-y-3 hover:shadow-md transition-shadow cursor-pointer"
+        @click="showDetails(row)"
+      >
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold text-gray-400">#{{ row.id }}</span>
+            <span class="font-semibold text-sm text-gray-900 truncate max-w-[150px]">{{ getModelName(row) }}</span>
+          </div>
+          <el-tag
+            :type="row.is_success ? 'success' : 'danger'"
+            size="small"
+            class="!rounded-md"
+          >
+            {{ row.status_code }}
+          </el-tag>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2 py-2 border-y border-gray-50">
+          <div class="text-center">
+            <div class="text-[10px] text-gray-400 uppercase">耗時</div>
+            <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.response_time_ms }}ms</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-400 uppercase">Tokens</div>
+            <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.total_tokens || 0 }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-400 uppercase">費用</div>
+            <div class="text-xs font-medium text-gray-700 mt-0.5">${{ row.cost?.toFixed(4) || '0.00' }}</div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] text-gray-400">{{ formatDateTime(row.request_timestamp) }}</span>
+          <code class="text-[10px] bg-gray-50 px-1.5 py-0.5 rounded font-mono text-gray-400">
+            {{ formatApiKey(row) }}
+          </code>
+        </div>
+      </div>
+
+      <div v-if="!loading && logs.length === 0" class="text-center py-16">
+        <el-icon :size="48" class="text-gray-300 mb-3"><Document /></el-icon>
+        <p class="text-gray-400">暫無調用日誌</p>
+      </div>
+    </div>
+
+    <!-- 分頁 -->
+    <div v-if="total > 0" class="flex justify-end mt-4">
       <el-pagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
         :page-sizes="[20, 50, 100]"
-        layout="total, sizes, prev, pager, next"
+        :layout="isMobile ? 'total, prev, next' : 'total, sizes, prev, pager, next'"
         :total="total"
+        :small="isMobile"
         @size-change="fetchLogs"
         @current-change="fetchLogs"
       />
     </div>
 
     <!-- 詳情對話框 -->
-    <!-- 詳情對話框 -->
-    <el-dialog v-model="detailsVisible" title="調用詳情" :width="windowWidth < 850 ? '95%' : '800px'" top="5vh" destroy-on-close>
-      <div v-if="currentLog" class="log-details">
-        <!-- 基本資訊摘要 (即使在加載 Body 時也先行顯示) -->
-        <div class="log-info-grid">
-          <div class="info-item">
-            <span class="label">ID:</span>
-            <span class="value">#{{ currentLog.id }}</span>
+    <el-dialog
+      v-model="detailsVisible"
+      title="調用詳情"
+      :width="isMobile ? '95%' : '850px'"
+      :fullscreen="isMobile"
+      destroy-on-close
+      class="log-detail-dialog"
+    >
+      <div v-if="currentLog" class="space-y-6">
+        <!-- 頂部摘要卡片 -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">狀態</div>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full" :class="currentLog.is_success ? 'bg-green-500' : 'bg-red-500'"></span>
+              <span class="text-sm font-bold" :class="currentLog.is_success ? 'text-green-600' : 'text-red-600'">
+                {{ currentLog.status_code }}
+              </span>
+            </div>
           </div>
-          <div class="info-item">
-            <span class="label">狀態:</span>
-            <el-tag :type="currentLog.is_success ? 'success' : 'danger'" size="small">
-              {{ currentLog.is_success ? '成功' : '失敗' }} ({{ currentLog.status_code }})
-            </el-tag>
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">總耗時</div>
+            <div class="text-sm font-bold text-gray-900">{{ currentLog.response_time_ms }} ms</div>
           </div>
-          <div class="info-item">
-            <span class="label">耗時:</span>
-            <span class="value">{{ currentLog.response_time_ms }} ms</span>
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">Tokens</div>
+            <div class="text-sm font-bold text-gray-900">{{ currentLog.total_tokens || 0 }}</div>
           </div>
-          <div class="info-item">
-            <span class="label">Tokens:</span>
-            <span class="value">{{ currentLog.total_tokens || 0 }}</span>
-          </div>
-          <div class="info-item">
-            <span class="label">模型:</span>
-            <span class="value">{{ currentLog.provider?.model || 'N/A' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="label">費用:</span>
-            <span class="value">${{ currentLog.cost?.toFixed(6) || '0.000000' }}</span>
-          </div>
-          <div class="info-item" style="grid-column: span 2">
-            <span class="label">請求時間:</span>
-            <span class="value">{{ formatDateTime(currentLog.request_timestamp) }}</span>
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">費用</div>
+            <div class="text-sm font-bold text-gray-900">${{ currentLog.cost?.toFixed(6) || '0.000000' }}</div>
           </div>
         </div>
 
-        <div v-loading="detailsLoading" element-loading-text="正在獲取完整日誌詳情...">
-          <el-collapse v-model="activeCollapseNames">
-          <el-collapse-item name="1">
-            <template #title>
-              <div class="collapse-title">
-                <span>請求內容 (Request Body)</span>
-                <el-button type="primary" link size="small" icon="DocumentCopy" @click.stop="copyText(currentLog.request_body)">複製 JSON</el-button>
+        <!-- 詳細摺疊面板 -->
+        <div v-loading="detailsLoading" class="border rounded-xl border-gray-200 overflow-hidden">
+          <el-collapse v-model="activeCollapseNames" class="!border-none">
+            <!-- 請求文本 -->
+            <el-collapse-item name="2">
+              <template #title>
+                <div class="flex items-center justify-between w-full pr-4 px-4">
+                  <div class="flex items-center gap-2">
+                    <el-icon class="text-blue-500"><ChatLineRound /></el-icon>
+                    <span class="font-semibold text-gray-700">對話內容 (Parsed)</span>
+                  </div>
+                  <el-button type="primary" link size="small" :icon="DocumentCopy" @click.stop="copyText(extractText(currentLog.request_body, true))">複製</el-button>
+                </div>
+              </template>
+              <div class="p-4 bg-gray-50 border-t border-gray-100">
+                <div class="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap font-sans">
+                  {{ extractText(currentLog.request_body, true) }}
+                </div>
               </div>
-            </template>
-            <div class="detail-section no-border">
-              <pre class="json-box">{{ formatJson(currentLog.request_body) }}</pre>
-            </div>
-          </el-collapse-item>
-          
-          <el-collapse-item name="2">
-            <template #title>
-              <div class="collapse-title">
-                <span class="text-blue font-bold">對話文本 (Parsed Messages)</span>
-                <el-button type="primary" link size="small" icon="DocumentCopy" @click.stop="copyText(extractText(currentLog.request_body, true))">複製文本</el-button>
-              </div>
-            </template>
-            <div class="detail-section no-border">
-              <div class="text-area bg-blue-50">{{ extractText(currentLog.request_body, true) }}</div>
-            </div>
-          </el-collapse-item>
+            </el-collapse-item>
 
-          <el-collapse-item name="3">
-            <template #title>
-              <div class="collapse-title">
-                <span>響應內容 (Response Body)</span>
-                <el-button type="primary" link size="small" icon="DocumentCopy" @click.stop="copyText(currentLog.response_body)">複製 JSON</el-button>
+            <!-- 響應文本 -->
+            <el-collapse-item name="4">
+              <template #title>
+                <div class="flex items-center justify-between w-full pr-4 px-4">
+                  <div class="flex items-center gap-2">
+                    <el-icon class="text-green-500"><CircleCheck /></el-icon>
+                    <span class="font-semibold text-gray-700">回答文本 (Assistant)</span>
+                  </div>
+                  <el-button type="primary" link size="small" :icon="DocumentCopy" @click.stop="copyText(extractText(currentLog.response_body, false))">複製</el-button>
+                </div>
+              </template>
+              <div class="p-4 bg-gray-50 border-t border-gray-100">
+                <div class="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap font-sans">
+                  {{ extractText(currentLog.response_body, false) }}
+                </div>
               </div>
-            </template>
-            <div class="detail-section no-border">
-              <pre class="json-box">{{ formatJson(currentLog.response_body) }}</pre>
-            </div>
-          </el-collapse-item>
+            </el-collapse-item>
 
-          <el-collapse-item name="4">
-            <template #title>
-              <div class="collapse-title">
-                <span class="text-green font-bold">回答文本 (Assistant Content)</span>
-                <el-button type="primary" link size="small" icon="DocumentCopy" @click.stop="copyText(extractText(currentLog.response_body, false))">複製文本</el-button>
+            <!-- 原始 JSON -->
+            <el-collapse-item name="1">
+              <template #title>
+                <div class="flex items-center justify-between w-full pr-4 px-4">
+                  <div class="flex items-center gap-2">
+                    <el-icon class="text-gray-400"><Cpu /></el-icon>
+                    <span class="font-semibold text-gray-700">原始請求 JSON</span>
+                  </div>
+                  <el-button type="primary" link size="small" :icon="DocumentCopy" @click.stop="copyText(currentLog.request_body)">複製</el-button>
+                </div>
+              </template>
+              <div class="bg-slate-900 p-4 border-t border-gray-800">
+                <pre class="text-[11px] text-blue-300 font-mono overflow-auto max-h-[300px]">{{ formatJson(currentLog.request_body) }}</pre>
               </div>
-            </template>
-            <div class="detail-section no-border">
-              <div class="text-area bg-green-50">{{ extractText(currentLog.response_body, false) }}</div>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
+            </el-collapse-item>
+
+            <el-collapse-item name="3">
+              <template #title>
+                <div class="flex items-center justify-between w-full pr-4 px-4">
+                  <div class="flex items-center gap-2">
+                    <el-icon class="text-gray-400"><Cpu /></el-icon>
+                    <span class="font-semibold text-gray-700">原始響應 JSON</span>
+                  </div>
+                  <el-button type="primary" link size="small" :icon="DocumentCopy" @click.stop="copyText(currentLog.response_body)">複製</el-button>
+                </div>
+              </template>
+              <div class="bg-slate-900 p-4 border-t border-gray-800">
+                <pre class="text-[11px] text-green-300 font-mono overflow-auto max-h-[300px]">{{ formatJson(currentLog.response_body) }}</pre>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+
+        <!-- 錯誤訊息 -->
+        <div v-if="currentLog.error_message" class="space-y-2">
+          <div class="text-xs font-bold text-red-500 uppercase">錯誤訊息</div>
+          <div class="p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-700 font-mono break-all whitespace-pre-wrap">
+            {{ currentLog.error_message }}
+          </div>
         </div>
       </div>
-    </el-dialog>
-
-    <!-- 錯誤詳情 -->
-    <el-dialog v-model="errorVisible" title="錯誤詳情" width="500px">
-      <div class="error-box">{{ currentLog?.error_message }}</div>
+      <template #footer>
+        <el-button @click="detailsVisible = false" class="w-full sm:w-auto">關閉詳情</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import request from '../../utils/request'
 import { ElMessage } from 'element-plus'
+import { 
+  Refresh, View, Document, DocumentCopy, 
+  ChatLineRound, CircleCheck, Cpu 
+} from '@element-plus/icons-vue'
+
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value < 768)
+const onResize = () => { screenWidth.value = window.innerWidth }
 
 const logs = ref<any[]>([])
 const loading = ref(false)
@@ -190,16 +290,17 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const detailsVisible = ref(false)
-const errorVisible = ref(false)
 const currentLog = ref<any>(null)
 const activeCollapseNames = ref(['2', '4'])
-const windowWidth = ref(window.innerWidth)
 
-const handleResize = () => {
-  windowWidth.value = window.innerWidth
-}
+const tabs = [
+  { label: '全部請求', name: 'all' },
+  { label: '成功', name: 'successful' },
+  { label: '失敗', name: 'failed' }
+]
 
-const handleTabChange = () => {
+const handleTabChange = (name: string) => {
+  activeTab.value = name
   currentPage.value = 1
   fetchLogs()
 }
@@ -226,8 +327,6 @@ const fetchLogs = async () => {
 }
 
 const formatApiKey = (row: any) => {
-  // 後端返回的資料結構中，如果沒有帶關聯，我們可能只能看到 ID
-  // 這裡假設後端返回了 api_key_display 或者我們需要從 api_key 物件中獲取
   if (row.api_key_display) return row.api_key_display
   if (row.api_key?.key) return `${row.api_key.key.slice(0, 5)}...${row.api_key.key.slice(-4)}`
   return 'N/A'
@@ -279,15 +378,12 @@ const extractText = (bodyStr: string, isReq: boolean) => {
 }
 
 const showDetails = async (log: any) => {
-  // 先將當前點擊的 log 設置為 currentLog，這樣對話框打開時可以先顯示基本信息
   currentLog.value = log
   detailsVisible.value = true
   detailsLoading.value = true
   
   try {
-    // 獲取完整詳情（包含 request_body 和 response_body）
     const data: any = await request.get(`logs/${log.id}`)
-    // 合併數據：保留列表中的基本信息，覆蓋/添加詳情中的完整信息
     currentLog.value = { ...log, ...data }
   } catch (error) {
     console.error('獲取詳情失敗:', error)
@@ -311,132 +407,20 @@ const copyText = (text: any) => {
   })
 }
 
-const showError = (log: any) => {
-  currentLog.value = log
-  errorVisible.value = true
-}
-
 onMounted(() => {
   fetchLogs()
-  window.addEventListener('resize', handleResize)
+  window.addEventListener('resize', onResize)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 
 <style scoped>
-.logs-container {
-  padding: 10px;
-}
-.header {
-  margin-bottom: 15px;
-}
-.title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-.pagination {
-  margin-top: 15px;
-  display: flex;
-  justify-content: flex-end;
-}
-.log-details {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-.log-info-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  background: #f8f9fa;
-  padding: 15px;
-  border-radius: 8px;
-  margin-bottom: 5px;
-}
-.info-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.info-item .label {
-  font-size: 12px;
-  color: #909399;
-}
-.info-item .value {
-  font-weight: bold;
-  font-size: 14px;
-  word-break: break-all;
-}
-
-@media (max-width: 768px) {
-  .log-info-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 480px) {
-  .log-info-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.detail-section {
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-}
-.section-title {
-  padding: 8px 12px;
-  background: #f5f7fa;
-  font-weight: bold;
-  font-size: 14px;
-  border-bottom: 1px solid #ebeef5;
-}
-.text-blue { color: #409EFF; }
-.text-green { color: #67C23A; }
-.font-bold { font-weight: bold; }
-.mb-4 { margin-bottom: 16px; }
-.no-border { border: none !important; }
-.collapse-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  padding-right: 20px;
-}
-.bg-blue-50 { background-color: #ecf5ff; }
-.bg-green-50 { background-color: #f0f9eb; }
-
-.json-box {
-  padding: 12px;
-  margin: 0;
-  font-family: monospace;
-  font-size: 12px;
-  max-height: 250px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.text-area {
-  padding: 12px;
-  font-size: 14px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow: auto;
-}
-.error-box {
-  padding: 15px;
-  background: #fef0f0;
-  color: #f56c6c;
-  border: 1px solid #fde2e2;
-  border-radius: 4px;
-  word-break: break-all;
-  white-space: pre-wrap;
+.log-detail-dialog :deep(.el-collapse-item__header) {
+  height: auto;
+  line-height: normal;
+  padding: 12px 0;
 }
 </style>

@@ -7,6 +7,7 @@ import zhTw from 'element-plus/es/locale/lang/zh-tw'
 
 import App from './App.vue'
 import router from './router'
+import './style.css'
 
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -15,10 +16,14 @@ import {
   TitleComponent,
   TooltipComponent,
   LegendComponent,
-  GridComponent
+  GridComponent,
+  DatasetComponent,
+  TransformComponent
 } from 'echarts/components'
+import { LabelLayout, UniversalTransition } from 'echarts/features'
 import VChart from 'vue-echarts'
 
+// Register ECharts core modules
 use([
   CanvasRenderer,
   PieChart,
@@ -27,7 +32,11 @@ use([
   TitleComponent,
   TooltipComponent,
   LegendComponent,
-  GridComponent
+  GridComponent,
+  DatasetComponent,
+  TransformComponent,
+  LabelLayout,
+  UniversalTransition
 ])
 
 const app = createApp(App)

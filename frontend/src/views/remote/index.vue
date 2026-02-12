@@ -1,61 +1,111 @@
 <template>
-  <div class="remote-root">
-    <div class="glass-bg"></div>
-    
-    <header class="remote-nav">
-      <div class="nav-content">
-        <div class="logo-area">
-          <div class="logo-dot"></div>
-          <h1>遠端控制中心</h1>
+  <div class="min-h-screen bg-slate-950 text-slate-50 selection:bg-blue-500/30 font-sans relative overflow-x-hidden">
+    <!-- 背景裝飾 -->
+    <div class="fixed top-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full pointer-events-none z-0"></div>
+    <div class="fixed bottom-[-10%] left-[-10%] w-[30%] h-[30%] bg-indigo-600/10 blur-[100px] rounded-full pointer-events-none z-0"></div>
+
+    <!-- 頂部導航 -->
+    <header class="sticky top-0 z-50 backdrop-blur-md bg-slate-950/80 border-b border-white/5">
+      <div class="max-w-2xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-2.5 h-2.5 bg-blue-500 rounded-full shadow-[0_0_12px_rgba(59,130,246,0.8)]"></div>
+          <h1 class="text-lg font-bold tracking-tight">遠端控制中心</h1>
         </div>
-        <div class="status-badge" v-if="apiKey">
-          <span class="pulse"></span> 在線
+        <div v-if="apiKey" class="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-semibold">
+          <span class="relative flex h-2 w-2">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          在線授權
         </div>
       </div>
     </header>
 
-    <main class="remote-main" v-loading="loading" element-loading-background="rgba(255,255,255,0.1)">
-      <div v-if="!apiKey" class="auth-error">
-        <el-icon size="64" color="#ff4d4f"><Lock /></el-icon>
-        <h2>存取受限</h2>
-        <p>請使用授權連結進入此頁面</p>
+    <main class="max-w-2xl mx-auto px-4 py-8 relative z-10" v-loading="loading" element-loading-background="transparent">
+      <!-- 未授權狀態 -->
+      <div v-if="!apiKey" class="flex flex-col items-center justify-center py-20 text-center space-y-4">
+        <div class="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mb-2">
+          <el-icon size="40" class="text-red-500"><Lock /></el-icon>
+        </div>
+        <h2 class="text-2xl font-bold">存取受限</h2>
+        <p class="text-slate-400 max-w-xs mx-auto">此頁面需要有效的授權金鑰方可存取。請使用原始連結進入。</p>
       </div>
 
-      <div v-else class="groups-container">
-        <div v-for="group in groups" :key="group.id" class="group-wrapper">
-          <div class="group-header">
-            <div class="title-wrap">
-              <span class="group-id">#{{ group.id }}</span>
-              <h2>{{ group.name }}</h2>
+      <!-- 群組與清單 -->
+      <div v-else class="space-y-12">
+        <div v-for="group in groups" :key="group.id" class="group-section">
+          <!-- 群組頭部 -->
+          <div class="flex items-end justify-between mb-4 px-1">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="text-blue-500 font-black text-lg">#{{ group.id }}</span>
+                <h2 class="text-xl font-bold">{{ group.name }}</h2>
+              </div>
+              <p class="text-xs text-slate-500">當前負載均衡策略：優先級輪詢</p>
             </div>
-            <p class="hint">按住並拖拽可調整優先級</p>
+            <span class="text-[10px] text-slate-500 font-medium uppercase tracking-widest bg-white/5 px-2 py-1 rounded">可拖拽</span>
           </div>
 
+          <!-- 拖拽清單 -->
           <draggable
             v-model="group.providers"
             item-key="id"
-            class="model-list"
+            tag="div"
+            class="space-y-3"
             @change="() => handleOrderChange(group)"
-            :animation="300"
-            ghost-class="ghost-card"
-            chosen-class="chosen-card"
+            :animation="250"
+            ghost-class="drag-ghost"
+            chosen-class="drag-chosen"
+            drag-class="drag-fallback"
+            :force-fallback="true"
+            fallback-tolerance="0"
           >
             <template #item="{ element, index }">
-              <div class="model-item" :class="{ 'is-top': index === 0 }">
-                <div class="rank-num">P{{ index + 1 }}</div>
-                <div class="info-content">
-                  <div class="model-id">{{ element.model }}</div>
-                  <div class="provider-name">{{ element.name }}</div>
+              <div
+                class="group/item relative bg-slate-900/50 hover:bg-slate-800/60 border border-white/5 hover:border-blue-500/30 rounded-2xl p-4 flex items-center gap-4 cursor-grab active:cursor-grabbing select-none"
+                :class="{ 'ring-1 ring-blue-500/50 bg-slate-800/80': index === 0 }"
+              >
+                <!-- 排名標籤 -->
+                <div class="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm transition-colors"
+                     :class="index === 0 ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-500 group-hover/item:text-slate-300'">
+                  {{ index + 1 }}
                 </div>
-                <div class="active-dot" v-if="index === 0">
-                  <el-icon color="#52c41a"><CircleCheckFilled /></el-icon>
+
+                <!-- 資訊 -->
+                <div class="flex-grow min-w-0">
+                  <h3 class="font-bold text-slate-100 truncate group-hover/item:text-white transition-colors">{{ element.model }}</h3>
+                  <p class="text-xs text-slate-500 truncate mt-0.5">{{ element.name }}</p>
                 </div>
+
+                <!-- 狀態指示 -->
+                <div v-if="index === 0" class="flex-shrink-0">
+                  <div class="flex items-center gap-1.5 bg-blue-500/10 text-blue-400 px-2.5 py-1 rounded-lg border border-blue-500/20 shadow-sm">
+                    <el-icon size="14"><CircleCheckFilled /></el-icon>
+                    <span class="text-[10px] font-bold uppercase tracking-tight">主供應商</span>
+                  </div>
+                </div>
+
+                <!-- 裝飾線條 -->
+                <div v-if="index === 0" class="absolute -inset-[1px] bg-gradient-to-r from-blue-500/20 to-indigo-500/20 rounded-2xl -z-10 blur-sm"></div>
               </div>
             </template>
           </draggable>
         </div>
       </div>
+
+      <!-- 空狀態 -->
+      <div v-if="apiKey && !loading && groups.length === 0" class="py-20 text-center">
+        <el-icon size="48" class="text-slate-700 mb-4"><DataBoard /></el-icon>
+        <p class="text-slate-500">目前沒有分配任何供應商群組</p>
+      </div>
     </main>
+
+    <!-- 底部版權 -->
+    <footer class="py-12 border-t border-white/5 relative z-10">
+      <div class="max-w-2xl mx-auto px-4 text-center">
+        <p class="text-[10px] text-slate-600 uppercase tracking-[0.2em] font-bold">NiceAPI Remote Protocol v2.0</p>
+      </div>
+    </footer>
   </div>
 </template>
 
@@ -63,7 +113,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import draggable from 'vuedraggable'
-import { Lock, CircleCheckFilled } from '@element-plus/icons-vue'
+import { Lock, CircleCheckFilled, DataBoard } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '../../utils/request'
 
@@ -109,13 +159,15 @@ const handleOrderChange = async (group: Group) => {
         group_id: group.id
       }
     })
-    ElMessage.success({
-      message: `${group.name} 順序已更新`,
-      duration: 1500,
-      offset: 50
+    ElMessage({
+      message: `${group.name} 優先級已同步`,
+      type: 'success',
+      duration: 2000,
+      plain: true,
+      customClass: 'remote-toast'
     })
   } catch (error) {
-    ElMessage.error('同步失敗，請刷新頁面')
+    ElMessage.error('同步失敗，請嘗試刷新頁面')
   }
 }
 
@@ -135,211 +187,40 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.remote-root {
-  min-height: 100vh;
-  background-color: #0f172a;
-  color: #f8fafc;
-  font-family: 'Inter', -apple-system, sans-serif;
-  position: relative;
-  overflow-x: hidden;
+/* 拖拽時留在原處引導排序的佔位符 (Ghost) */
+.drag-ghost {
+  opacity: 0.2 !important;
+  background: rgba(59, 130, 246, 0.1) !important;
+  border: 2px dashed #3b82f6 !important;
+  border-radius: 1rem !important;
 }
 
-.glass-bg {
-  position: fixed;
-  top: -10%;
-  right: -10%;
-  width: 40%;
-  height: 40%;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, rgba(0, 0, 0, 0) 70%);
-  z-index: 0;
+/* 選中元素樣式 (Chosen) */
+.drag-chosen {
+  cursor: grabbing !important;
+}
+
+/* 實際跟隨滑鼠移動的鏡像元素 (Fallback/Drag) */
+.drag-fallback {
+  opacity: 0.9 !important;
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 10px 10px -5px rgb(0 0 0 / 0.4) !important;
+  border-color: #3b82f6 !important;
+  background-color: #1e293b !important;
   pointer-events: none;
+  z-index: 9999;
+  /* 移除 Transform/Transition 以免干擾 Fallback 定位邏輯 */
+  transform: none !important;
+  transition: none !important;
 }
 
-.remote-nav {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  backdrop-filter: blur(12px);
-  background: rgba(15, 23, 42, 0.8);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+/* 全域覆蓋 Element Plus 在此頁面的樣式以維持暗色調 */
+.remote-toast {
+  background-color: #1e293b !important;
+  border-color: #3b82f6 !important;
+  color: #3b82f6 !important;
 }
 
-.nav-content {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.logo-area {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.logo-dot {
-  width: 12px;
-  height: 12px;
-  background: #3b82f6;
-  border-radius: 50%;
-  box-shadow: 0 0 15px #3b82f6;
-}
-
-.logo-area h1 {
-  font-size: 1.25rem;
-  font-weight: 700;
-  margin: 0;
-  letter-spacing: -0.025em;
-}
-
-.status-badge {
-  background: rgba(52, 211, 153, 0.1);
-  color: #34d399;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid rgba(52, 211, 153, 0.2);
-}
-
-.pulse {
-  width: 8px;
-  height: 8px;
-  background: #34d399;
-  border-radius: 50%;
-  animation: pulse-ring 2s infinite;
-}
-
-@keyframes pulse-ring {
-  0% { transform: scale(0.9); opacity: 1; }
-  70% { transform: scale(1.5); opacity: 0; }
-  100% { transform: scale(0.9); opacity: 0; }
-}
-
-.remote-main {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 2rem 1rem;
-  position: relative;
-  z-index: 1;
-}
-
-.group-wrapper {
-  margin-bottom: 3rem;
-}
-
-.group-header {
-  margin-bottom: 1.25rem;
-}
-
-.title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-
-.group-id {
-  color: #3b82f6;
-  font-weight: 800;
-  font-size: 1.1rem;
-}
-
-.group-header h2 {
-  font-size: 1.5rem;
-  margin: 0;
-}
-
-.hint {
-  color: #94a3b8;
-  font-size: 0.875rem;
-}
-
-.model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.model-item {
-  background: rgba(30, 41, 59, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 16px;
-  padding: 1.2rem;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  user-select: none;
-  cursor: grab;
-}
-
-.model-item:active {
-  cursor: grabbing;
-}
-
-.model-item.is-top {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(30, 41, 59, 0.7));
-  border-color: rgba(59, 130, 246, 0.3);
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-}
-
-.rank-num {
-  font-size: 0.875rem;
-  font-weight: 800;
-  color: #64748b;
-  min-width: 24px;
-}
-
-.is-top .rank-num { color: #3b82f6; }
-
-.info-content {
-  flex-grow: 1;
-  min-width: 0;
-}
-
-.model-id {
-  font-weight: 600;
-  font-size: 1.05rem;
-  margin-bottom: 4px;
-  word-break: break-all;
-  line-height: 1.4;
-}
-
-.provider-name {
-  color: #94a3b8;
-  font-size: 0.8rem;
-  word-break: break-all;
-  line-height: 1.2;
-}
-
-.auth-error {
-  text-align: center;
-  padding-top: 10vh;
-}
-
-.auth-error h2 { margin: 1.5rem 0 0.5rem; }
-.auth-error p { color: #94a3b8; }
-
-.ghost-card {
-  opacity: 0.3;
-  transform: scale(0.95);
-}
-
-.chosen-card {
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
-  border-color: rgba(59, 130, 246, 0.5);
-}
-
-/* 適配手機 */
-@media (max-width: 640px) {
-  .remote-main { padding: 1rem; }
-  .model-item { padding: 0.75rem; gap: 10px; }
-  .group-header h2 { font-size: 1.25rem; }
+body {
+  background-color: #020617;
 }
 </style>

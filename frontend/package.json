@@ -9,13 +9,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "http-proxy-middleware": "^3.0.0",
     "@element-plus/icons-vue": "^2.3.2",
+    "@tailwindcss/vite": "^4.1.18",
     "axios": "^1.13.4",
     "echarts": "^6.0.0",
     "element-plus": "^2.13.2",
+    "express": "^4.21.0",
+    "http-proxy-middleware": "^3.0.0",
     "pinia": "^3.0.4",
+    "tailwindcss": "^4.1.18",
     "vue": "^3.5.24",
     "vue-echarts": "^8.0.1",
     "vue-router": "^5.0.2",

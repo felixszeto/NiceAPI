@@ -1,101 +1,173 @@
 <template>
-  <div class="api-keys-container">
-    <div class="header-row">
-      <h2>API 金鑰</h2>
-      <el-button type="primary" link icon="Refresh" @click="fetchKeys">刷新</el-button>
+  <div class="space-y-6">
+    <!-- 頁面標題列 -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-semibold text-gray-900">API 金鑰</h1>
+        <p class="text-sm text-gray-500 mt-1">管理 API 存取金鑰與群組權限</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <el-button :icon="Refresh" @click="fetchKeys" circle />
+        <el-button type="primary" :icon="Plus" @click="handleAddKey">生成金鑰</el-button>
+      </div>
     </div>
 
-    <div class="action-row">
-      <el-button type="primary" icon="Plus" @click="handleAddKey">生成 API 金鑰</el-button>
-    </div>
-
-    <el-table :data="apiKeys" style="width: 100%" v-loading="loading" size="small" border stripe>
-      <el-table-column label="金鑰">
-        <template #default="scope">
-          <div class="key-display">
-            <code>{{ formatKeyDisplay(scope.row.key) }}</code>
-            <div class="key-actions">
-              <el-button type="primary" link icon="View" @click="viewFullKey(scope.row.key)">
-                <el-tooltip content="查看金鑰" placement="top" />
-              </el-button>
-              <el-button type="primary" link icon="CopyDocument" @click="copyKey(scope.row.key)">
-                <el-tooltip content="複製金鑰" placement="top" />
-              </el-button>
+    <!-- 桌面端表格 -->
+    <div class="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <el-table :data="apiKeys" v-loading="loading" size="small" stripe>
+        <el-table-column label="金鑰" min-width="160">
+          <template #default="scope">
+            <div class="flex items-center gap-2">
+              <code class="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{{ formatKeyDisplay(scope.row.key) }}</code>
+              <el-button type="primary" link :icon="View" size="small" @click="viewFullKey(scope.row.key)" />
+              <el-button type="primary" link :icon="CopyDocument" size="small" @click="copyKey(scope.row.key)" />
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="狀態" width="80" align="center">
+          <template #default="scope">
+            <el-switch v-model="scope.row.is_active" @change="(val: boolean) => handleStatusChange(scope.row, val)" size="small" />
+          </template>
+        </el-table-column>
+        <el-table-column label="群組" min-width="150">
+          <template #default="scope">
+            <div class="flex flex-wrap gap-1">
+              <el-tag v-for="g in scope.row.groups" :key="g.id" size="small" effect="plain" class="!rounded-md">{{ g.name }}</el-tag>
+              <span v-if="!scope.row.groups?.length" class="text-xs text-gray-400">未分配</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="call_count" label="調用次數" width="90" align="right" />
+        <el-table-column label="創建時間" width="150">
+          <template #default="scope">
+            <span class="text-xs text-gray-500">{{ formatDateTime(scope.row.created_at) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="最後使用" width="150">
+          <template #default="scope">
+            <span class="text-xs text-gray-500">{{ scope.row.last_used_at ? formatDateTime(scope.row.last_used_at) : '從未使用' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" align="center" fixed="right">
+          <template #default="scope">
+            <div class="flex items-center justify-center gap-1">
+              <el-button type="primary" link :icon="Edit" size="small" @click="handleEditKey(scope.row)" />
+              <el-button type="info" link :icon="Promotion" size="small" @click="openRemote(scope.row.key)" />
+              <el-button type="danger" link :icon="Delete" size="small" @click="handleDeleteKey(scope.row)" />
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <!-- 移動端卡片 -->
+    <div class="md:hidden space-y-3" v-loading="loading">
+      <div
+        v-for="row in apiKeys"
+        :key="row.id"
+        class="bg-white rounded-xl border border-gray-200 p-4 space-y-3"
+      >
+        <!-- 金鑰與狀態 -->
+        <div class="flex items-center justify-between">
+          <code class="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{{ formatKeyDisplay(row.key) }}</code>
+          <el-switch v-model="row.is_active" @change="(val: boolean) => handleStatusChange(row, val)" size="small" />
+        </div>
+
+        <!-- 群組標籤 -->
+        <div class="flex flex-wrap gap-1">
+          <el-tag v-for="g in row.groups" :key="g.id" size="small" effect="plain" class="!rounded-md">{{ g.name }}</el-tag>
+          <span v-if="!row.groups?.length" class="text-xs text-gray-400">未分配群組</span>
+        </div>
+
+        <!-- 統計資訊 -->
+        <div class="grid grid-cols-3 gap-2 text-center text-xs">
+          <div class="bg-gray-50 rounded-lg p-2">
+            <div class="text-gray-400">調用</div>
+            <div class="font-semibold text-gray-900 mt-0.5">{{ row.call_count || 0 }}</div>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="啟用" width="80" align="center">
-        <template #default="scope">
-          <el-switch v-model="scope.row.is_active" @change="(val: boolean) => handleStatusChange(scope.row, val)" size="small" />
-        </template>
-      </el-table-column>
-      <el-table-column label="群組">
-        <template #default="scope">
-          <div class="group-tags">
-            <el-tag v-for="g in scope.row.groups" :key="g.id" size="small" class="mr-2">{{ g.name }}</el-tag>
+          <div class="bg-gray-50 rounded-lg p-2">
+            <div class="text-gray-400">創建</div>
+            <div class="font-semibold text-gray-900 mt-0.5 truncate">{{ formatDateShort(row.created_at) }}</div>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column prop="call_count" label="API 調用" width="100" align="right" />
-      <el-table-column prop="created_at" label="創建時間" width="160">
-        <template #default="scope">
-          {{ formatDateTime(scope.row.created_at) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="last_used_at" label="最後使用" width="160">
-        <template #default="scope">
-          {{ scope.row.last_used_at ? formatDateTime(scope.row.last_used_at) : '從未使用' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="150" align="center">
-        <template #default="scope">
-          <el-button type="primary" link icon="Edit" @click="handleEditKey(scope.row)" />
-          <el-button type="info" link icon="Promotion" @click="openRemote(scope.row.key)">
-            <el-tooltip content="打開遠端管理" placement="top" />
-          </el-button>
-          <el-button type="danger" link icon="Delete" @click="handleDeleteKey(scope.row)" />
-        </template>
-      </el-table-column>
-    </el-table>
+          <div class="bg-gray-50 rounded-lg p-2">
+            <div class="text-gray-400">最後使用</div>
+            <div class="font-semibold text-gray-900 mt-0.5 truncate">{{ row.last_used_at ? formatDateShort(row.last_used_at) : '從未' }}</div>
+          </div>
+        </div>
+
+        <!-- 操作按鈕 -->
+        <div class="flex items-center justify-between pt-2 border-t border-gray-100">
+          <div class="flex gap-1">
+            <el-button size="small" :icon="CopyDocument" @click="copyKey(row.key)">複製</el-button>
+            <el-button size="small" :icon="Promotion" @click="openRemote(row.key)">遠端</el-button>
+          </div>
+          <div class="flex gap-1">
+            <el-button size="small" type="primary" :icon="Edit" @click="handleEditKey(row)" />
+            <el-button size="small" type="danger" :icon="Delete" @click="handleDeleteKey(row)" />
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!loading && apiKeys.length === 0" class="text-center py-16">
+        <el-icon :size="48" class="text-gray-300 mb-3"><Key /></el-icon>
+        <p class="text-gray-400">暫無 API 金鑰</p>
+      </div>
+    </div>
 
     <!-- 生成成功對話框 -->
-    <el-dialog v-model="showKeyDialog" title="API 金鑰已生成" width="400px">
-      <p class="text-sm text-gray-500 mb-4">請立即複製並保存此金鑰，關閉後將無法再次查看完整內容。</p>
-      <el-input v-model="newKey" readonly>
-        <template #append>
-          <el-button icon="CopyDocument" @click="copyKey(newKey)" />
-        </template>
-      </el-input>
+    <el-dialog v-model="showKeyDialog" title="API 金鑰已生成" :width="isMobile ? '90%' : '450px'">
+      <div class="space-y-4">
+        <div class="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <el-icon class="text-amber-500 mt-0.5" :size="16"><Warning /></el-icon>
+          <p class="text-sm text-amber-700">請立即複製並保存此金鑰，關閉後將無法再次查看完整內容。</p>
+        </div>
+        <el-input v-model="newKey" readonly size="large">
+          <template #append>
+            <el-button :icon="CopyDocument" @click="copyKey(newKey)" />
+          </template>
+        </el-input>
+      </div>
       <template #footer>
-        <el-button type="primary" @click="showKeyDialog = false">關閉</el-button>
+        <el-button type="primary" @click="showKeyDialog = false">我已保存，關閉</el-button>
       </template>
     </el-dialog>
 
     <!-- 編輯/新增對話框 -->
-    <el-dialog v-model="dialogVisible" :title="form.id ? '編輯 API 金鑰' : '生成新金鑰'" width="500px">
-      <el-form :model="form" label-width="100px">
+    <el-dialog
+      v-model="dialogVisible"
+      :title="form.id ? '編輯 API 金鑰' : '生成新金鑰'"
+      :width="isMobile ? '90%' : '500px'"
+    >
+      <el-form :model="form" label-position="top">
         <el-form-item label="群組權限" required>
-          <el-select v-model="form.group_ids" multiple placeholder="分配到群組" style="width: 100%">
+          <el-select v-model="form.group_ids" multiple placeholder="選擇要分配的群組" style="width: 100%" size="large">
             <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
           </el-select>
+          <div class="text-xs text-gray-400 mt-1">金鑰將擁有所選群組中所有供應商的存取權限</div>
         </el-form-item>
         <el-form-item label="啟用狀態">
           <el-switch v-model="form.is_active" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitForm">確定</el-button>
+        <div class="flex justify-end gap-2">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="submitForm">確定</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import request from '../../utils/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Refresh, Edit, Delete, View, CopyDocument, Promotion, Warning, Key } from '@element-plus/icons-vue'
+
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value < 768)
+const onResize = () => { screenWidth.value = window.innerWidth }
 
 const apiKeys = ref<any[]>([])
 const groups = ref<any[]>([])
@@ -131,12 +203,13 @@ const fetchGroups = async () => {
   }
 }
 
-const formatKeyDisplay = (key: string) => {
-  return `${key.slice(0, 5)}...${key.slice(-4)}`
-}
+const formatKeyDisplay = (key: string) => `${key.slice(0, 5)}...${key.slice(-4)}`
 
-const formatDateTime = (ts: string) => {
-  return new Date(ts).toLocaleString()
+const formatDateTime = (ts: string) => new Date(ts).toLocaleString()
+
+const formatDateShort = (ts: string) => {
+  const d = new Date(ts)
+  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 const handleAddKey = () => {
@@ -211,14 +284,10 @@ const openRemote = (key: string) => {
 onMounted(() => {
   fetchKeys()
   fetchGroups()
+  window.addEventListener('resize', onResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', onResize)
 })
 </script>
-
-<style scoped>
-.api-keys-container { padding: 10px; }
-.header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.action-row { margin-bottom: 20px; }
-.key-display { display: flex; align-items: center; justify-content: space-between; }
-.key-actions { display: flex; gap: 5px; }
-.mr-2 { margin-right: 8px; }
-</style>
