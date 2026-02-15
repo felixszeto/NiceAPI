@@ -259,7 +259,7 @@ const handleCurrentChange = (val: number) => {
 
 const fetchAllProviders = async () => {
   try {
-    const data: any = await request.get('providers/', { params: { limit: 1000 } })
+    const data: any = await request.get('providers/')
     allProviders.value = data.items.map((p: any) => ({
       ...p,
       selected: false,

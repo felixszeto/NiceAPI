@@ -307,7 +307,7 @@ def create_provider(provider: schemas.ApiProviderCreate, db: Session = Depends(g
     return crud.create_provider(db=db, provider=provider)
 
 @router.get("/providers/", response_model=schemas.ProviderListResponse)
-def read_providers(skip: int = 0, limit: int = 100, name_filter: Optional[str] = None, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
+def read_providers(skip: Optional[int] = None, limit: Optional[int] = None, name_filter: Optional[str] = None, db: Session = Depends(get_db), admin: str = Depends(get_current_admin)):
     providers = crud.get_providers(db, skip=skip, limit=limit, name_filter=name_filter)
     total = crud.count_providers(db, name_filter=name_filter)
     return {"items": providers, "total": total}

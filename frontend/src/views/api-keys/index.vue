@@ -196,7 +196,7 @@ const fetchKeys = async () => {
 
 const fetchGroups = async () => {
   try {
-    const data: any = await request.get('groups/', { params: { limit: 1000 } })
+    const data: any = await request.get('groups/')
     groups.value = data.items
   } catch (error) {
     console.error(error)

@@ -40,7 +40,8 @@ class ApiProvider(Base):
     call_logs = relationship("CallLog", back_populates="provider")
     groups = relationship("Group",
                           secondary="provider_group_association",
-                          back_populates="providers")
+                          back_populates="providers",
+                          overlaps="provider")
 
 class Group(Base):
     __tablename__ = "groups"
@@ -50,7 +51,8 @@ class Group(Base):
     
     providers = relationship("ApiProvider",
                              secondary="provider_group_association",
-                             back_populates="groups")
+                             back_populates="groups",
+                             overlaps="provider")
 
 
     api_keys = relationship("APIKey",

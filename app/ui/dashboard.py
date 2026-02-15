@@ -136,7 +136,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('avg_response_time_ms')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = crud.get_call_logs(db, limit=100)
+                        logs = crud.get_call_logs(db, limit=None)
                         model_times = {}
                         model_counts = {}
                         for log in logs:
@@ -163,7 +163,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('api_endpoint_success_rate')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = crud.get_call_logs(db, limit=1000)
+                        logs = crud.get_call_logs(db, limit=None)
                         endpoint_stats = {}
                         for log in logs:
                             if log.provider:
@@ -195,7 +195,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('avg_response_time_by_endpoint_ms')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = crud.get_call_logs(db, limit=1000)
+                        logs = crud.get_call_logs(db, limit=None)
                         endpoint_times = {}
                         endpoint_counts = {}
                         for log in logs:
@@ -225,7 +225,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('total_api_calls_by_endpoint')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = crud.get_call_logs(db, limit=1000)
+                        logs = crud.get_call_logs(db, limit=None)
                         endpoint_counts = {}
                         for log in logs:
                             if log.provider:
@@ -251,7 +251,7 @@ def render_dashboard(db: Session, container: ui.element, panel: ui.tab_panel):
                 with ui.element('div').classes('w-full md:w-[calc(50%-0.75rem)] border rounded-lg p-4 shadow-md bg-white'):
                     ui.label(get_text('total_cost_by_model')).classes('text-h6')
                     with ui.element('div').classes('w-full h-64'):
-                        logs = crud.get_call_logs(db, limit=1000)
+                        logs = crud.get_call_logs(db, limit=None)
                         model_costs = {}
                         for log in logs:
                             if log.provider and log.provider.model and log.cost is not None:

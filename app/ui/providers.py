@@ -13,7 +13,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
 
     def get_all_providers_as_dict(search_query=None):
         db.expire_all()
-        providers = crud.get_providers(db)
+        providers = crud.get_providers(db, limit=None)
         rows = [
             {key: getattr(p, key) for key in p.__table__.columns.keys()}
             for p in providers
@@ -45,7 +45,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
                 ui.input(placeholder=get_text('search_models')).props('outlined dense icon="search"').classes('w-64').on('update:model-value', lambda e: refresh_providers_table(e.args))
             
             async def open_sync_models_dialog():
-                providers = crud.get_providers(db)
+                providers = crud.get_providers(db, limit=None)
                 unique_sync_targets = {}
                 for p in providers:
                     target_key = (p.api_endpoint, p.api_key)
@@ -218,7 +218,7 @@ def render_providers(db: Session, container: ui.element, panel: ui.tab_panel):
             with ui.dialog() as dialog, ui.card().classes('w-[95vw] md:w-[60vw] max-w-[800px] min-h-[250px]'):
                 ui.label(get_text('quick_remove_by_api_key')).classes('text-h6')
                 def get_keys_with_alias():
-                    providers = crud.get_providers(db)
+                    providers = crud.get_providers(db, limit=None)
                     key_info = {}
                     for p in providers:
                         key_info[p.api_key] = f"{p.name} [{p.api_endpoint}] ({p.api_key[:5]}...{p.api_key[-4:]})"

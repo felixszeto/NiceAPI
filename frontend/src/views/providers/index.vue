@@ -265,7 +265,7 @@ const fetchProviders = async () => {
 const fetchUniqueProviders = async () => {
   loadingUnique.value = true
   try {
-    const data: any = await request.get('providers/', { params: { limit: 10000 } })
+    const data: any = await request.get('providers/')
     const map = new Map()
     data.items.forEach((p: any) => {
       const key = `${p.api_endpoint}|${p.api_key}`

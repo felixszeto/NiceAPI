@@ -9,7 +9,7 @@ def render_groups(db: Session, container: ui.element, panel: ui.tab_panel):
         db.commit() # 結束當前事務，確保讀取到最新數據
         db.expire_all()
         groups = crud.get_groups(db)
-        providers = crud.get_providers(db)
+        providers = crud.get_providers(db, limit=None)
         providers_dicts = [{key: getattr(p, key) for key in p.__table__.columns.keys()} for p in providers]
         group_data = []
         for group in groups:

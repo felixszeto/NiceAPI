@@ -9,7 +9,7 @@ def get_provider(db: Session, provider_id: int):
 def get_provider_by_name(db: Session, name: str):
     return db.query(models.ApiProvider).filter(models.ApiProvider.name == name).first()
 
-def get_providers(db: Session, skip: int = 0, limit: int = 1000, name_filter: str = None, endpoint_filter: str = None):
+def get_providers(db: Session, skip: int = None, limit: int = None, name_filter: str = None, endpoint_filter: str = None):
     from sqlalchemy import or_
     query = db.query(models.ApiProvider)
     if name_filter:
@@ -19,7 +19,13 @@ def get_providers(db: Session, skip: int = 0, limit: int = 1000, name_filter: st
         ))
     if endpoint_filter:
         query = query.filter(models.ApiProvider.api_endpoint.contains(endpoint_filter))
-    return query.offset(skip).limit(limit).all()
+    
+    if skip is not None:
+        query = query.offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+        
+    return query.all()
 
 def count_providers(db: Session, name_filter: str = None, endpoint_filter: str = None):
     from sqlalchemy import or_
