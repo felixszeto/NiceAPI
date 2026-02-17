@@ -31,7 +31,9 @@ class ApiProvider(Base):
     api_endpoint = Column(String, nullable=False)
     api_key = Column(String, nullable=False)
     model = Column(String, index=True)
-    price_per_million_tokens = Column(Float)
+    price_per_million_tokens = Column(Float)  # Legacy: kept for backward compatibility
+    input_price_per_million_tokens = Column(Float, nullable=True)
+    output_price_per_million_tokens = Column(Float, nullable=True)
     type = Column(String, default="per_token") # per_token or per_call
     is_active = Column(Boolean, default=True)
     total_calls = Column(Integer, default=0)
@@ -63,6 +65,7 @@ class APIKey(Base):
     __tablename__ = "api_keys"
 
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True, default="")
     key = Column(String, unique=True, index=True, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(TAIPEI_TZ))

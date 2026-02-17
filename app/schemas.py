@@ -8,6 +8,8 @@ class ApiProviderBase(BaseModel):
     api_endpoint: str
     model: Optional[str] = None
     price_per_million_tokens: Optional[float] = None
+    input_price_per_million_tokens: Optional[float] = None
+    output_price_per_million_tokens: Optional[float] = None
     type: Optional[str] = "per_token"
     is_active: Optional[bool] = True
 
@@ -140,12 +142,14 @@ class ErrorKeyword(ErrorKeywordBase):
         from_attributes = True
 # Schemas for APIKey
 class APIKeyBase(BaseModel):
+    name: Optional[str] = ""
     is_active: bool = True
 
 class APIKeyCreate(APIKeyBase):
     group_ids: List[int]
 
 class APIKeyUpdate(APIKeyBase):
+    name: Optional[str] = None
     group_ids: Optional[List[int]] = None
 
 class APIKeySlim(APIKeyBase):

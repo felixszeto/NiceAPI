@@ -23,7 +23,16 @@
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="model" label="模型" show-overflow-tooltip />
         <el-table-column prop="name" label="別名" show-overflow-tooltip />
-        <el-table-column prop="price_per_million_tokens" label="價格 ($/1M)" width="130" align="right" />
+        <el-table-column label="輸入價格 ($/1M)" width="140" align="right">
+          <template #default="scope">
+            {{ scope.row.input_price_per_million_tokens ?? scope.row.price_per_million_tokens ?? '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="輸出價格 ($/1M)" width="140" align="right">
+          <template #default="scope">
+            {{ scope.row.output_price_per_million_tokens ?? scope.row.price_per_million_tokens ?? '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="狀態" width="80" align="center">
           <template #default="scope">
             <el-switch v-model="scope.row.is_active" @change="(val: boolean) => handleStatusChange(scope.row, val)" size="small" />
@@ -53,7 +62,11 @@
           <el-switch v-model="row.is_active" @change="(val: boolean) => handleStatusChange(row, val)" size="small" />
         </div>
         <div class="flex items-center justify-between">
-          <span class="text-xs text-slate-500">${{ row.price_per_million_tokens }} / 1M tokens</span>
+          <div class="text-xs text-slate-500">
+            <span>入: ${{ row.input_price_per_million_tokens ?? row.price_per_million_tokens ?? '-' }}</span>
+            <span class="mx-1">|</span>
+            <span>出: ${{ row.output_price_per_million_tokens ?? row.price_per_million_tokens ?? '-' }}</span>
+          </div>
           <div class="flex gap-1">
             <el-button type="primary" link icon="Edit" size="small" @click="handleEditProvider(row)" />
             <el-button type="danger" link icon="Delete" size="small" @click="handleDeleteProvider(row)" />
@@ -131,10 +144,15 @@
             <el-form-item label="API 金鑰" :required="!form.id">
               <el-input v-model="form.api_key" type="password" show-password :placeholder="form.id ? '留空表示不修改' : ''" />
             </el-form-item>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-x-4">
-              <el-form-item label="價格 ($/1M)">
-                <el-input-number v-model="form.price_per_million_tokens" :precision="4" :step="0.0001" class="!w-full" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+              <el-form-item label="輸入價格 ($/1M)">
+                <el-input-number v-model="form.input_price_per_million_tokens" :precision="4" :step="0.0001" class="!w-full" />
               </el-form-item>
+              <el-form-item label="輸出價格 ($/1M)">
+                <el-input-number v-model="form.output_price_per_million_tokens" :precision="4" :step="0.0001" class="!w-full" />
+              </el-form-item>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
               <el-form-item label="類型">
                 <el-select v-model="form.type" class="!w-full">
                   <el-option label="per_token" value="per_token" />
@@ -226,6 +244,8 @@ const form = reactive({
   api_key: '',
   model: '',
   price_per_million_tokens: 0,
+  input_price_per_million_tokens: 0,
+  output_price_per_million_tokens: 0,
   type: 'per_token',
   is_active: true
 })
@@ -304,7 +324,7 @@ const handleCurrentChange = (val: number) => {
 }
 
 const handleAddProvider = () => {
-  Object.assign(form, { id: null, name: '', api_endpoint: '', api_key: '', model: '', price_per_million_tokens: 0, type: 'per_token', is_active: true })
+  Object.assign(form, { id: null, name: '', api_endpoint: '', api_key: '', model: '', price_per_million_tokens: 0, input_price_per_million_tokens: 0, output_price_per_million_tokens: 0, type: 'per_token', is_active: true })
   activeDialogTab.value = 'batch'
   dialogVisible.value = true
 }

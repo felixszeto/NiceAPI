@@ -59,9 +59,16 @@ def create_provider(db: Session, provider: schemas.ApiProviderCreate):
     return db_provider
 
 def update_provider(db: Session, provider_id: int, provider_data: dict):
-    if 'usage_level' in provider_data:
-        del provider_data['usage_level']
-    db.query(models.ApiProvider).filter(models.ApiProvider.id == provider_id).update(provider_data)
+    # Only allow updating actual column fields, filter out relationships and non-column keys
+    allowed_fields = {
+        'name', 'api_endpoint', 'api_key', 'model',
+        'price_per_million_tokens', 'input_price_per_million_tokens', 'output_price_per_million_tokens',
+        'type', 'is_active'
+    }
+    filtered_data = {k: v for k, v in provider_data.items() if k in allowed_fields}
+    if not filtered_data:
+        return get_provider(db, provider_id)
+    db.query(models.ApiProvider).filter(models.ApiProvider.id == provider_id).update(filtered_data)
     db.commit()
     return get_provider(db, provider_id)
 
@@ -115,6 +122,8 @@ def get_call_logs(db: Session, skip: int = 0, limit: int = 100, filter_success: 
             models.CallLog.is_success,
             models.CallLog.status_code,
             models.CallLog.response_time_ms,
+            models.CallLog.prompt_tokens,
+            models.CallLog.completion_tokens,
             models.CallLog.total_tokens,
             models.CallLog.cost,
             models.CallLog.error_message
@@ -268,6 +277,8 @@ def get_groups(db: Session, skip: int = 0, limit: int = 100):
                     api_key=assoc.provider.api_key,
                     model=assoc.provider.model,
                     price_per_million_tokens=assoc.provider.price_per_million_tokens,
+                    input_price_per_million_tokens=assoc.provider.input_price_per_million_tokens,
+                    output_price_per_million_tokens=assoc.provider.output_price_per_million_tokens,
                     type=assoc.provider.type,
                     is_active=assoc.provider.is_active,
                     total_calls=assoc.provider.total_calls,
@@ -331,18 +342,34 @@ def remove_provider_from_group(db: Session, provider_id: int, group_id: int):
     return result > 0
 
 def calculate_cost(provider: models.ApiProvider, prompt_tokens: int, completion_tokens: int, total_tokens: int) -> float | None:
-    """Calculates the cost of an API call based on token usage."""
-    if not provider.price_per_million_tokens:
+    """Calculates the cost of an API call based on token usage.
+    Supports separate input/output pricing when available, falls back to unified price."""
+    input_price = provider.input_price_per_million_tokens
+    output_price = provider.output_price_per_million_tokens
+    unified_price = provider.price_per_million_tokens
+
+    # If separate input/output prices are set, use them
+    if input_price is not None and output_price is not None:
+        if prompt_tokens is not None and completion_tokens is not None:
+            input_cost = (prompt_tokens / 1_000_000) * input_price
+            output_cost = (completion_tokens / 1_000_000) * output_price
+            return input_cost + output_cost
+        # Fallback: if only total_tokens available, use average of input+output price
+        if total_tokens is not None:
+            avg_price = (input_price + output_price) / 2
+            return (total_tokens / 1_000_000) * avg_price
+        return None
+
+    # Fallback to unified price
+    if not unified_price:
         return None
     
-    # Prioritize prompt and completion tokens for more accurate pricing
     if prompt_tokens is not None and completion_tokens is not None:
         total_tokens_for_cost = prompt_tokens + completion_tokens
-        return (total_tokens_for_cost / 1_000_000) * provider.price_per_million_tokens
+        return (total_tokens_for_cost / 1_000_000) * unified_price
     
-    # Fallback to total_tokens if prompt/completion are not available
     if total_tokens is not None:
-        return (total_tokens / 1_000_000) * provider.price_per_million_tokens
+        return (total_tokens / 1_000_000) * unified_price
         
     return None
 import secrets
@@ -389,7 +416,7 @@ def generate_api_key():
 
 def create_api_key(db: Session, api_key_data: schemas.APIKeyCreate):
     new_key = generate_api_key()
-    db_api_key = models.APIKey(key=new_key, is_active=api_key_data.is_active)
+    db_api_key = models.APIKey(key=new_key, name=api_key_data.name or "", is_active=api_key_data.is_active)
     
     groups = db.query(models.Group).filter(models.Group.id.in_(api_key_data.group_ids)).all()
     if not groups:

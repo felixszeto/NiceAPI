@@ -10,6 +10,7 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
         keys = crud.get_api_keys(db)
         return [{
             "id": key.id,
+            "name": key.name or "",
             "key_display": f"{key.key[:5]}...{key.key[-4:]}",
             "key": key.key,
             "is_active": key.is_active,
@@ -53,6 +54,8 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
                     group_select.update()
                 ui.notify(get_text('group_list_refreshed'), color='info')
 
+            add_name_input = ui.input(label=get_text('name'), placeholder=get_text('optional')).props('filled').classes('w-full')
+
             with ui.row().classes('w-full no-wrap items-center'):
                 group_select = ui.select({}, multiple=True, label=get_text('assign_to_groups')).props('filled').classes('w-full')
 
@@ -60,7 +63,7 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
                 if not group_select.value:
                     ui.notify(get_text('assign_to_at_least_one_group_error'), color='negative')
                     return
-                new_key = crud.create_api_key(db, schemas.APIKeyCreate(group_ids=group_select.value))
+                new_key = crud.create_api_key(db, schemas.APIKeyCreate(name=add_name_input.value or "", group_ids=group_select.value))
                 key_display_label.value = new_key.key
                 show_key_dialog.open()
                 refresh_keys_table()
@@ -76,6 +79,7 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
         ui.button(get_text('create_api_key'), on_click=open_add_key_dialog, color='primary').classes('mb-4')
         
         keys_table = ui.table(columns=[
+            {'name': 'name', 'label': get_text('name'), 'field': 'name', 'align': 'left'},
             {'name': 'key_display', 'label': get_text('key'), 'field': 'key_display', 'align': 'left'},
             {'name': 'is_active', 'label': get_text('active'), 'field': 'is_active', 'sortable': True},
             {'name': 'groups', 'label': get_text('groups'), 'field': 'groups', 'align': 'left', 'classes': 'mobile-hide', 'headerClasses': 'mobile-hide'},
@@ -123,11 +127,13 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
                     edit_group_select.update()
                 ui.notify(get_text('group_list_refreshed'), color='info')
 
+            edit_name_input = ui.input(label=get_text('name'), placeholder=get_text('optional')).props('filled').classes('w-full')
+
             with ui.row().classes('w-full no-wrap items-center'):
                 edit_group_select = ui.select({}, multiple=True, label=get_text('assigned_groups')).props('filled').classes('w-full')
 
             def handle_edit_key():
-                crud.update_api_key(db, int(edit_key_id.text), schemas.APIKeyUpdate(group_ids=edit_group_select.value))
+                crud.update_api_key(db, int(edit_key_id.text), schemas.APIKeyUpdate(name=edit_name_input.value or "", group_ids=edit_group_select.value))
                 ui.notify(get_text('api_key_updated'), color='positive')
                 refresh_keys_table(); edit_dialog.close()
             with ui.row():
@@ -139,6 +145,7 @@ def render_api_keys(db: Session, container: ui.element, panel: ui.tab_panel):
         keys_table.on('open_remote', lambda e: ui.navigate.to(f'/remote?key={e.args}', new_tab=True))
         async def open_edit_dialog(args):
             edit_key_id.text = str(args['id'])
+            edit_name_input.value = args.get('name', '')
             # 確保打開編輯對話框時獲取最新的群組列表
             await refresh_edit_group_options()
             edit_group_select.value = args['group_ids']

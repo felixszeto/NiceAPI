@@ -61,7 +61,17 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="total_tokens" label="Tokens" width="90" align="right" />
+        <el-table-column label="輸入 Tokens" width="100" align="right">
+          <template #default="scope">
+            <span class="text-xs text-gray-600">{{ scope.row.prompt_tokens ?? '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="輸出 Tokens" width="100" align="right">
+          <template #default="scope">
+            <span class="text-xs text-gray-600">{{ scope.row.completion_tokens ?? '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="total_tokens" label="總 Tokens" width="90" align="right" />
         <el-table-column label="費用" width="110" align="right">
           <template #default="scope">
             <span class="text-xs text-gray-500 font-mono">
@@ -104,14 +114,18 @@
           </el-tag>
         </div>
 
-        <div class="grid grid-cols-3 gap-2 py-2 border-y border-gray-50">
+        <div class="grid grid-cols-4 gap-2 py-2 border-y border-gray-50">
           <div class="text-center">
             <div class="text-[10px] text-gray-400 uppercase">耗時</div>
             <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.response_time_ms }}ms</div>
           </div>
           <div class="text-center">
-            <div class="text-[10px] text-gray-400 uppercase">Tokens</div>
-            <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.total_tokens || 0 }}</div>
+            <div class="text-[10px] text-gray-400 uppercase">輸入</div>
+            <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.prompt_tokens ?? '-' }}</div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-gray-400 uppercase">輸出</div>
+            <div class="text-xs font-medium text-gray-700 mt-0.5">{{ row.completion_tokens ?? '-' }}</div>
           </div>
           <div class="text-center">
             <div class="text-[10px] text-gray-400 uppercase">費用</div>
@@ -158,7 +172,7 @@
     >
       <div v-if="currentLog" class="space-y-6">
         <!-- 頂部摘要卡片 -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
+        <div class="grid grid-cols-3 sm:grid-cols-6 gap-3 bg-gray-50 p-4 rounded-xl border border-gray-100">
           <div class="space-y-1">
             <div class="text-[10px] text-gray-400 font-bold uppercase">狀態</div>
             <div class="flex items-center gap-1.5">
@@ -173,7 +187,15 @@
             <div class="text-sm font-bold text-gray-900">{{ currentLog.response_time_ms }} ms</div>
           </div>
           <div class="space-y-1">
-            <div class="text-[10px] text-gray-400 font-bold uppercase">Tokens</div>
+            <div class="text-[10px] text-gray-400 font-bold uppercase">輸入 Tokens</div>
+            <div class="text-sm font-bold text-gray-900">{{ currentLog.prompt_tokens ?? '-' }}</div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">輸出 Tokens</div>
+            <div class="text-sm font-bold text-gray-900">{{ currentLog.completion_tokens ?? '-' }}</div>
+          </div>
+          <div class="space-y-1">
+            <div class="text-[10px] text-gray-400 font-bold uppercase">總 Tokens</div>
             <div class="text-sm font-bold text-gray-900">{{ currentLog.total_tokens || 0 }}</div>
           </div>
           <div class="space-y-1">

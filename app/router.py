@@ -33,7 +33,11 @@ def _find_available_provider(db: Session, providers_query, failure_threshold=5, 
         
         success_rate = (p.successful_calls / p.total_calls * 100) if p.total_calls > 0 else 0
         priority_str = f", Priority={priority}" if priority is not None else ""
-        logger.info(f"  - Candidate #{i+1}: ID={p.id}, Name='{p.name}', Model='{p.model}', Price=${p.price_per_million_tokens}/M tokens{priority_str}, Success Rate={success_rate:.2f}%")
+        if p.input_price_per_million_tokens is not None and p.output_price_per_million_tokens is not None:
+            price_str = f"Input=${p.input_price_per_million_tokens}/M, Output=${p.output_price_per_million_tokens}/M"
+        else:
+            price_str = f"${p.price_per_million_tokens}/M tokens"
+        logger.info(f"  - Candidate #{i+1}: ID={p.id}, Name='{p.name}', Model='{p.model}', {price_str}{priority_str}, Success Rate={success_rate:.2f}%")
 
     for row in potential_providers:
         provider = row.ApiProvider if hasattr(row, 'ApiProvider') else row

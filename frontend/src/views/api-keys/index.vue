@@ -15,6 +15,11 @@
     <!-- 桌面端表格 -->
     <div class="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
       <el-table :data="apiKeys" v-loading="loading" size="small" stripe>
+        <el-table-column prop="name" label="名稱" min-width="100">
+          <template #default="scope">
+            <span class="text-sm">{{ scope.row.name || '-' }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="金鑰" min-width="160">
           <template #default="scope">
             <div class="flex items-center gap-2">
@@ -67,9 +72,12 @@
         :key="row.id"
         class="bg-white rounded-xl border border-gray-200 p-4 space-y-3"
       >
-        <!-- 金鑰與狀態 -->
+        <!-- 名稱、金鑰與狀態 -->
         <div class="flex items-center justify-between">
-          <code class="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{{ formatKeyDisplay(row.key) }}</code>
+          <div class="flex items-center gap-2 min-w-0">
+            <span v-if="row.name" class="text-sm font-medium text-gray-700 truncate">{{ row.name }}</span>
+            <code class="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{{ formatKeyDisplay(row.key) }}</code>
+          </div>
           <el-switch v-model="row.is_active" @change="(val: boolean) => handleStatusChange(row, val)" size="small" />
         </div>
 
@@ -139,6 +147,9 @@
       :width="isMobile ? '90%' : '500px'"
     >
       <el-form :model="form" label-position="top">
+        <el-form-item label="名稱">
+          <el-input v-model="form.name" placeholder="為金鑰取一個易於辨識的名稱（選填）" size="large" />
+        </el-form-item>
         <el-form-item label="群組權限" required>
           <el-select v-model="form.group_ids" multiple placeholder="選擇要分配的群組" style="width: 100%" size="large">
             <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
@@ -178,6 +189,7 @@ const newKey = ref('')
 
 const form = reactive({
   id: null as number | null,
+  name: '',
   group_ids: [] as number[],
   is_active: true
 })
@@ -213,12 +225,13 @@ const formatDateShort = (ts: string) => {
 }
 
 const handleAddKey = () => {
-  Object.assign(form, { id: null, group_ids: [], is_active: true })
+  Object.assign(form, { id: null, name: '', group_ids: [], is_active: true })
   dialogVisible.value = true
 }
 
 const handleEditKey = (row: any) => {
   form.id = row.id
+  form.name = row.name || ''
   form.group_ids = row.groups.map((g: any) => g.id)
   form.is_active = row.is_active
   dialogVisible.value = true

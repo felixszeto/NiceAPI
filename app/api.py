@@ -390,6 +390,8 @@ async def sync_providers(request: schemas.ModelImportRequest, db: Session = Depe
             api_key=request.api_key,
             model=model_id, # Ensure this is the raw model_id from the provider
             price_per_million_tokens=0,
+            input_price_per_million_tokens=0,
+            output_price_per_million_tokens=0,
             type=request.default_type,
             is_active=True
         )
@@ -552,6 +554,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 logger.info(f"Streaming attempt with provider: {provider.name} (ID: {provider.id})")
                 start_time = time.time()
                 full_response_text = ""
+                stream_usage = {}  # To capture usage from the final chunk
                 
                 # Increment active calls
                 log_db_init = SessionLocal()
@@ -606,6 +609,16 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                     if keyword in full_response_text:
                                         raise ValueError(f"Failure keyword found: '{keyword}'")
                                 
+                                # Try to extract usage from SSE data chunks
+                                for sse_line in chunk_raw.split('\n'):
+                                    if sse_line.startswith('data: ') and sse_line.strip() != 'data: [DONE]':
+                                        try:
+                                            sse_data = json.loads(sse_line[6:])
+                                            if 'usage' in sse_data and sse_data['usage']:
+                                                stream_usage = sse_data['usage']
+                                        except (json.JSONDecodeError, KeyError):
+                                            pass
+
                                 # Basic <think> tag filtering for streaming
                                 if "<think>" in chunk_raw:
                                     in_think_block = True
@@ -623,13 +636,26 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                                     yield chunk
                             
                             end_time = time.time()
-                            # Use a temporary session to log success
+                            # Calculate cost from stream usage if available
+                            stream_prompt_tokens = stream_usage.get('prompt_tokens')
+                            stream_completion_tokens = stream_usage.get('completion_tokens')
+                            stream_total_tokens = stream_usage.get('total_tokens')
+                            stream_cost = None
+                            
+                            # Need to re-fetch provider from DB since the original object may be detached
                             log_db = SessionLocal()
                             try:
+                                if stream_prompt_tokens is not None or stream_total_tokens is not None:
+                                    db_provider = crud.get_provider(log_db, provider.id)
+                                    if db_provider:
+                                        stream_cost = crud.calculate_cost(db_provider, stream_prompt_tokens, stream_completion_tokens, stream_total_tokens)
+                                
                                 crud.create_call_log(log_db, schemas.CallLogCreate(
                                     provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ), is_success=True,
                                     status_code=response.status_code, response_time_ms=int((end_time - start_time) * 1000),
                                     error_message=None,
+                                    prompt_tokens=stream_prompt_tokens, completion_tokens=stream_completion_tokens,
+                                    total_tokens=stream_total_tokens, cost=stream_cost,
                                     request_body=json.dumps(request.dict()), response_body=full_response_text
                                 ))
                             finally:
@@ -873,6 +899,8 @@ async def import_models(request: schemas.ModelImportRequest, admin: str = Depend
                     api_key=request.api_key,
                     model=model_id,
                     price_per_million_tokens=0,
+                    input_price_per_million_tokens=0,
+                    output_price_per_million_tokens=0,
                     type=request.default_type,
                     usage_level=3,
                     is_active=True

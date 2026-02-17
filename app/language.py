@@ -39,6 +39,7 @@ i18n = {
     "quick_remove": {"en": "Quick Remove", "zh-TW": "快速移除", "zh-CN": "快速移除", "ko": "빠른 제거", "ja": "クイック削除"},
     "add_new_provider": {"en": "Add New Provider", "zh-TW": "新增供應商", "zh-CN": "新增供应商", "ko": "새 공급자 추가", "ja": "新しいプロバイダーを追加"},
     "name": {"en": "Name", "zh-TW": "名稱", "zh-CN": "名称", "ko": "이름", "ja": "名前"},
+    "optional": {"en": "Optional", "zh-TW": "選填", "zh-CN": "选填", "ko": "선택사항", "ja": "任意"},
     "api_endpoint": {"en": "API Endpoint", "zh-TW": "API 端點", "zh-CN": "API 端点", "ko": "API 엔드포인트", "ja": "APIエンドポイント"},
     "api_key": {"en": "API Key", "zh-TW": "API 金鑰", "zh-CN": "API 密钥", "ko": "API 키", "ja": "APIキー"},
     "model": {"en": "Model", "zh-TW": "模型", "zh-CN": "模型", "ko": "모델", "ja": "モデル"},

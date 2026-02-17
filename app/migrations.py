@@ -63,6 +63,25 @@ def run_migrations():
             except Exception as e:
                 logger.error(f"遷移失敗 (索引): {e}")
 
+    # Migration for api_providers to add input/output price columns
+    if 'api_providers' in inspector.get_table_names():
+        provider_columns = [c['name'] for c in inspector.get_columns('api_providers')]
+        with engine.begin() as conn:
+            if 'input_price_per_million_tokens' not in provider_columns:
+                try:
+                    logger.info("正在遷移：為 api_providers 添加 input_price_per_million_tokens 欄位...")
+                    conn.execute(text("ALTER TABLE api_providers ADD COLUMN input_price_per_million_tokens FLOAT"))
+                    logger.info("遷移成功：已添加 input_price_per_million_tokens 欄位。")
+                except Exception as e:
+                    logger.error(f"遷移失敗 (input_price_per_million_tokens): {e}")
+            if 'output_price_per_million_tokens' not in provider_columns:
+                try:
+                    logger.info("正在遷移：為 api_providers 添加 output_price_per_million_tokens 欄位...")
+                    conn.execute(text("ALTER TABLE api_providers ADD COLUMN output_price_per_million_tokens FLOAT"))
+                    logger.info("遷移成功：已添加 output_price_per_million_tokens 欄位。")
+                except Exception as e:
+                    logger.error(f"遷移失敗 (output_price_per_million_tokens): {e}")
+
     # Migration for provider_group_association to add active_calls
     if 'provider_group_association' in inspector.get_table_names():
         pga_columns = [c['name'] for c in inspector.get_columns('provider_group_association')]
@@ -74,6 +93,18 @@ def run_migrations():
                     logger.info("遷移成功：已添加 active_calls 欄位。")
                 except Exception as e:
                     logger.error(f"遷移失敗 (active_calls): {e}")
+
+    # Migration for api_keys to add name column
+    if 'api_keys' in inspector.get_table_names():
+        api_key_columns = [c['name'] for c in inspector.get_columns('api_keys')]
+        if 'name' not in api_key_columns:
+            with engine.begin() as conn:
+                try:
+                    logger.info("正在遷移：為 api_keys 添加 name 欄位...")
+                    conn.execute(text("ALTER TABLE api_keys ADD COLUMN name VARCHAR DEFAULT ''"))
+                    logger.info("遷移成功：已添加 name 欄位。")
+                except Exception as e:
+                    logger.error(f"遷移失敗 (api_keys.name): {e}")
 
     # Ensure CallLogDetail table exists (though create_all handles new tables, we log it)
     if 'call_log_details' not in inspector.get_table_names():
