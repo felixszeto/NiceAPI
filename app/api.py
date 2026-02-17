@@ -766,7 +766,7 @@ async def chat(request: schemas.ChatRequest, db: Session = Depends(get_db), api_
                 # Sanitize response to remove non-standard fields and <think> tags
                 return utils.sanitize_openai_response(response_json)
 
-            except (httpx.RequestError, ValueError) as e:
+            except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
                 end_time = time.time()
                 status_code = e.response.status_code if hasattr(e, 'response') and e.response is not None else 503
                 response_body = e.response.text if hasattr(e, 'response') and e.response is not None else None
