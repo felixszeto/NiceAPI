@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import func, case, cast, Integer
 from sqlalchemy.orm import Session
@@ -7,7 +8,6 @@ import asyncio
 import json
 from . import crud, models, schemas, router as smart_router, utils
 from .database import get_db, SessionLocal
-from fastapi.responses import StreamingResponse
 import time
 import logging
 import httpx
@@ -1232,6 +1232,613 @@ async def image_generation(request: schemas.ImageGenerationRequest, db: Session 
         finally:
             if group_id:
                 crud.decrement_active_calls(db, provider.id, group_id)
+
+@proxy_router.post("/v1/images/edits")
+async def image_edit(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Image Edit API - handles multipart/form-data with image uploads.
+    """
+    excluded_provider_ids = []
+    
+    # Parse multipart form data
+    form_data = await request.form()
+    model_name = form_data.get("model", "dall-e-2")
+    
+    # Permission check
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for image edit.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/images/edits") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}"}
+
+            # Build multipart payload
+            data = {}
+            files = []
+            for key, value in form_data.items():
+                if key == "model":
+                    data[key] = provider.model
+                elif hasattr(value, "filename"):
+                    content = await value.read()
+                    files.append((key, (value.filename, content, value.content_type)))
+                else:
+                    data[key] = value
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(api_url, headers=headers, data=data, files=files)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Image Edit: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+
+        except Exception as e:
+            logger.error(f"Image edit error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+
+@proxy_router.post("/v1/audio/transcriptions")
+async def audio_transcription(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Audio Transcription API - handles multipart/form-data with audio file uploads.
+    """
+    excluded_provider_ids = []
+    
+    # Parse multipart form data
+    form_data = await request.form()
+    model_name = form_data.get("model", "whisper-1")
+    
+    # Permission check
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for audio transcription.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/audio/transcriptions") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}"}
+
+            # Build multipart payload
+            data = {}
+            files = []
+            for key, value in form_data.items():
+                if key == "model":
+                    data[key] = provider.model
+                elif hasattr(value, "filename"):
+                    content = await value.read()
+                    files.append((key, (value.filename, content, value.content_type)))
+                else:
+                    data[key] = value
+
+            async with httpx.AsyncClient(timeout=300) as client:
+                response = await client.post(api_url, headers=headers, data=data, files=files)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Audio Transcription: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+
+        except Exception as e:
+            logger.error(f"Audio transcription error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+@proxy_router.post("/v1/images/variations")
+async def image_variation(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Image Variations API - handles multipart/form-data with image uploads.
+    """
+    excluded_provider_ids = []
+    form_data = await request.form()
+    model_name = form_data.get("model", "dall-e-2")
+
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for image variations.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/images/variations") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}"}
+            data = {}
+            files = []
+            for key, value in form_data.items():
+                if key == "model":
+                    data[key] = provider.model
+                elif hasattr(value, "filename"):
+                    content = await value.read()
+                    files.append((key, (value.filename, content, value.content_type)))
+                else:
+                    data[key] = value
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(api_url, headers=headers, data=data, files=files)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Image Variations: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content, status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+        except Exception as e:
+            logger.error(f"Image variations error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+
+@proxy_router.post("/v1/audio/translations")
+async def audio_translation(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Audio Translation API - handles multipart/form-data with audio file uploads.
+    """
+    excluded_provider_ids = []
+    form_data = await request.form()
+    model_name = form_data.get("model", "whisper-1")
+
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for audio translation.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/audio/translations") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}"}
+            data = {}
+            files = []
+            for key, value in form_data.items():
+                if key == "model":
+                    data[key] = provider.model
+                elif hasattr(value, "filename"):
+                    content = await value.read()
+                    files.append((key, (value.filename, content, value.content_type)))
+                else:
+                    data[key] = value
+
+            async with httpx.AsyncClient(timeout=300) as client:
+                response = await client.post(api_url, headers=headers, data=data, files=files)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Audio Translation: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content, status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+        except Exception as e:
+            logger.error(f"Audio translation error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+
+@proxy_router.post("/v1/audio/speech")
+async def audio_speech(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Text-to-Speech API - JSON request, returns audio binary.
+    """
+    body = await request.json()
+    model_name = body.get("model", "tts-1")
+
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    excluded_provider_ids = []
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for text-to-speech.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/audio/speech") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
+            payload = dict(body)
+            payload["model"] = provider.model
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.post(api_url, headers=headers, json=payload)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Audio Speech: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content, status_code=response.status_code,
+                media_type=response.headers.get("content-type", "audio/mpeg"),
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+        except Exception as e:
+            logger.error(f"Audio speech error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+
+@proxy_router.post("/v1/moderations")
+async def moderations(
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    OpenAI Moderations API - JSON request for content moderation.
+    """
+    body = await request.json()
+    model_name = body.get("model", "text-moderation-latest")
+
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}"):
+                matched_group_name = name
+                break
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    excluded_provider_ids = []
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No provider found for moderations.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+        try:
+            api_url = provider.api_endpoint.replace("/chat/completions", "/moderations") if "/chat/completions" in provider.api_endpoint else provider.api_endpoint
+            headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
+            payload = dict(body)
+            payload["model"] = provider.model
+
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(api_url, headers=headers, json=payload)
+
+            end_time = time.time()
+            try:
+                crud.create_call_log(db, schemas.CallLogCreate(
+                    provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                    is_success=response.status_code < 400, status_code=response.status_code,
+                    response_time_ms=int((end_time - start_time) * 1000),
+                    request_body=f"Moderations: model={model_name}",
+                    response_body=f"Status: {response.status_code}"
+                ))
+            except:
+                db.rollback()
+
+            if response.status_code >= 400:
+                excluded_provider_ids.append(provider.id)
+                continue
+
+            return Response(
+                content=response.content, status_code=response.status_code,
+                headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+            )
+        except Exception as e:
+            logger.error(f"Moderations error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
+
+@proxy_router.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def generic_proxy(
+    path: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    api_key: models.APIKey = Depends(get_api_key_from_bearer)
+):
+    """
+    Generic proxy for any other OpenAI-compatible endpoints not explicitly defined above.
+    Handles both JSON and multipart/form-data requests.
+    """
+    model_name = None
+    content_type = request.headers.get("Content-Type", "")
+    method = request.method
+
+    if method in ["POST", "PUT", "PATCH"]:
+        if "application/json" in content_type:
+            try:
+                body_json = await request.json()
+                model_name = body_json.get("model")
+            except:
+                pass
+        elif "multipart/form-data" in content_type:
+            try:
+                form_data = await request.form()
+                model_name = form_data.get("model")
+            except:
+                pass
+
+    if not model_name:
+        model_name = request.query_params.get("model")
+
+    if not model_name:
+        raise HTTPException(status_code=400, detail="Model name is required for routing in this proxy.")
+
+    authorized_group_names = {group.name for group in api_key.groups}
+    matched_group_name = None
+    if model_name in authorized_group_names:
+        matched_group_name = model_name
+    else:
+        for name in authorized_group_names:
+            if (name.endswith(f"/{model_name}") or model_name.endswith(f"/{name}") or
+                name == model_name.replace("claude-", "anthropic/") or
+                name == model_name.replace("gpt-", "openai/")):
+                matched_group_name = name
+                break
+
+    if not matched_group_name:
+        raise HTTPException(status_code=403, detail=f"API key not authorized for model: {model_name}")
+
+    excluded_provider_ids = []
+    while True:
+        dummy_request = schemas.ChatRequest(model=matched_group_name, messages=[])
+        provider, group_id = smart_router.select_provider(db, dummy_request, excluded_provider_ids=excluded_provider_ids)
+        if not provider:
+            raise HTTPException(status_code=503, detail="No available providers found for this request.")
+
+        start_time = time.time()
+        if group_id:
+            crud.increment_active_calls(db, provider.id, group_id)
+
+        try:
+            if "/v1/" in provider.api_endpoint:
+                base_url = provider.api_endpoint.split("/v1/")[0] + "/v1"
+            else:
+                base_url = provider.api_endpoint.rstrip('/')
+            target_url = f"{base_url}/{path}"
+            logger.info(f"Generic proxy forwarding {method} {path} to: {target_url}")
+
+            headers_to_send = {k: v for k, v in request.headers.items() if k.lower() not in ["host", "authorization", "content-length"]}
+            headers_to_send["Authorization"] = f"Bearer {provider.api_key}"
+
+            async with httpx.AsyncClient(timeout=300) as client:
+                if "multipart/form-data" in content_type:
+                    form_data = await request.form()
+                    data = {}
+                    files = []
+                    for key, value in form_data.items():
+                        if key == "model":
+                            data[key] = provider.model
+                        elif hasattr(value, "filename"):
+                            content = await value.read()
+                            files.append((key, (value.filename, content, value.content_type)))
+                        else:
+                            data[key] = value
+                    headers_to_send = {k: v for k, v in headers_to_send.items() if k.lower() != "content-type"}
+                    response = await client.request(method, target_url, headers=headers_to_send, data=data, files=files)
+                else:
+                    body = await request.body()
+                    if "application/json" in content_type:
+                        try:
+                            j = json.loads(body)
+                            if "model" in j:
+                                j["model"] = provider.model
+                            body = json.dumps(j).encode('utf-8')
+                        except:
+                            pass
+                    response = await client.request(method, target_url, headers=headers_to_send, content=body)
+
+                end_time = time.time()
+                try:
+                    crud.create_call_log(db, schemas.CallLogCreate(
+                        provider_id=provider.id, api_key_id=api_key.id, response_timestamp=datetime.now(TAIPEI_TZ),
+                        is_success=response.status_code < 400, status_code=response.status_code,
+                        response_time_ms=int((end_time - start_time) * 1000),
+                        request_body=f"Generic Proxy: {path}",
+                        response_body=f"Status: {response.status_code}"
+                    ))
+                except:
+                    db.rollback()
+
+                return Response(
+                    content=response.content, status_code=response.status_code,
+                    headers={k: v for k, v in response.headers.items() if k.lower() not in ["content-length", "content-encoding", "transfer-encoding"]}
+                )
+
+        except Exception as e:
+            logger.error(f"Generic proxy error with provider {provider.name}: {e}")
+            excluded_provider_ids.append(provider.id)
+            continue
+        finally:
+            if group_id:
+                crud.decrement_active_calls(db, provider.id, group_id)
+
 
 # --- Remote Public Management APIs (Auth via API Key) ---
 
